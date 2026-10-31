@@ -1,0 +1,654 @@
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=JetBrains+Mono:wght@400;500;700;800&family=Outfit:wght@400;500;600;700;800;900&display=swap');
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+:root {
+  --background: #090d16;
+  --foreground: #f1f5f9;
+}
+
+body {
+  background: #090d16;
+  color: #f1f5f9;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Custom dark tactical scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* =========================================================================
+   Police Dashboard — Premium Design System Animations
+   ========================================================================= */
+
+@keyframes radar-ping {
+  0% { transform: scale(0.8); opacity: 0.9; }
+  70% { transform: scale(2.2); opacity: 0; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+
+@keyframes critical-flash {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
+    border-color: rgba(239, 68, 68, 0.8);
+  }
+  50% {
+    box-shadow: 0 0 30px rgba(239, 68, 68, 0.85);
+    border-color: rgba(239, 68, 68, 1);
+  }
+}
+
+/* New premium animations */
+@keyframes criticalPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+@keyframes criticalBorderPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+    border-color: rgba(127, 29, 29, 1);
+  }
+  50% {
+    box-shadow: 0 0 20px 2px rgba(239, 68, 68, 0.3);
+    border-color: rgba(239, 68, 68, 0.9);
+  }
+}
+
+@keyframes ping {
+  0% { transform: scale(1); opacity: 0.8; }
+  80%, 100% { transform: scale(2); opacity: 0; }
+}
+
+@keyframes radarPing {
+  0% { transform: scale(0.9); opacity: 0.7; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.animate-radar-ping {
+  animation: radar-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.animate-critical-flash {
+  animation: critical-flash 1.4s ease-in-out infinite;
+}
+
+/* Police Dashboard Glass Card */
+.glass-card {
+  background: rgba(10, 22, 40, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(30, 58, 95, 0.6);
+}
+
+/* Glow utilities */
+.glow-red { box-shadow: 0 0 20px rgba(239, 68, 68, 0.35); }
+.glow-blue { box-shadow: 0 0 20px rgba(59, 130, 246, 0.35); }
+.glow-cyan { box-shadow: 0 0 20px rgba(34, 211, 238, 0.35); }
+.glow-green { box-shadow: 0 0 20px rgba(52, 211, 153, 0.35); }
+
+/* Leaflet dark theme map enhancements */
+.tactical-dark-tiles {
+  filter: brightness(0.6) invert(1) contrast(2.2) hue-rotate(200deg) saturate(0.25) brightness(0.75);
+}
+
+.leaflet-container {
+  background-color: #0c111d !important;
+  font-family: inherit;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #07101f !important;
+  color: #e2e8f0 !important;
+  border: 1px solid #1e3a5f !important;
+  border-radius: 12px !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 30px rgba(59, 130, 246, 0.08) !important;
+  padding: 0 !important;
+}
+
+.leaflet-popup-content {
+  margin: 0 !important;
+  background: transparent !important;
+}
+
+.leaflet-popup-tip-container {
+  display: none !important;
+}
+
+.leaflet-control-zoom a {
+  background-color: #07101f !important;
+  color: #e2e8f0 !important;
+  border-color: #1e3a5f !important;
+  border-radius: 8px !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background-color: #0f2040 !important;
+  color: #ffffff !important;
+}
+
+.leaflet-control-zoom {
+  border: 1px solid #1e3a5f !important;
+  border-radius: 10px !important;
+  overflow: hidden !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Custom tooltip style */
+.cad-tooltip {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+/* Number Plate Typography */
+.font-plate {
+  font-family: 'JetBrains Mono', 'Courier New', Courier, monospace;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+/* Handwritten / Wireframe Sketch Font matching the prompt's UI design */
+.font-sketch {
+  font-family: 'Caveat', cursive, -apple-system, sans-serif;
+  letter-spacing: 0.02em;
+}
+
+.font-display {
+  font-family: 'Outfit', -apple-system, sans-serif;
+}
+
+/* Chalk / Wireframe sketch glow & borders */
+.wireframe-border {
+  border: 1.5px solid rgba(255, 255, 255, 0.45);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.04);
+}
+
+.wireframe-border-bright {
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 20px rgba(255, 255, 255, 0.12);
+}
+
+.wireframe-dashed {
+  border: 1.5px dashed rgba(255, 255, 255, 0.35);
+}
+
+/* Analog Pomodoro Clock dial styling */
+.dial-tick {
+  stroke: rgba(255, 255, 255, 0.6);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.dial-tick-cardinal {
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+/* =========================================================================
+   SafeJourney Contact Web Theme (Exact style from provided design HTML)
+   ========================================================================= */
+.sj-contact-theme {
+  --bg: #F5EFE6;
+  --card: #FBF8F2;
+  --ink: #3A3631;
+  --mute: #8A8176;
+  --line: #E8DFD0;
+  --blue: #A9D6F5;
+  --blue-d: #3F8FC6;
+  --blue-l: #E4F2FC;
+  --red: #C9574B;
+  --red-l: #FBE6E2;
+  --red-b: #F0C4BD;
+  --red-t: #7A2A22;
+  --on-blue: #1F4E70;
+  --mapbg: #EFE7DA;
+  --mapblock: #F8F3EA;
+  --park: #DCEBDD;
+  --r: 18px;
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+@media (prefers-color-scheme: dark) {
+  .sj-contact-theme:not([data-theme="light"]) {
+    --bg: #1F1C18;
+    --card: #2A2621;
+    --ink: #EDE6DA;
+    --mute: #A39A8D;
+    --line: #3A352E;
+    --blue: #3B6786;
+    --blue-d: #7DBDE8;
+    --blue-l: #223645;
+    --red: #E27A6D;
+    --red-l: #3E2421;
+    --red-b: #5A322D;
+    --red-t: #F3C5BE;
+    --on-blue: #E4F2FC;
+    --mapbg: #2A2621;
+    --mapblock: #332E28;
+    --park: #2B3A2E;
+  }
+}
+
+.sj-contact-theme[data-theme="dark"] {
+  --bg: #1F1C18;
+  --card: #2A2621;
+  --ink: #EDE6DA;
+  --mute: #A39A8D;
+  --line: #3A352E;
+  --blue: #3B6786;
+  --blue-d: #7DBDE8;
+  --blue-l: #223645;
+  --red: #E27A6D;
+  --red-l: #3E2421;
+  --red-b: #5A322D;
+  --red-t: #F3C5BE;
+  --on-blue: #E4F2FC;
+  --mapbg: #2A2621;
+  --mapblock: #332E28;
+  --park: #2B3A2E;
+}
+
+.sj-contact-theme .demo {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 10px 14px 0;
+}
+
+.sj-contact-theme .seg {
+  display: flex;
+  gap: 4px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px;
+}
+
+.sj-contact-theme .seg button {
+  flex: 1;
+  border: 0;
+  background: none;
+  color: var(--mute);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 4px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sj-contact-theme .seg button.on {
+  background: var(--blue);
+  color: var(--on-blue);
+}
+
+.sj-contact-theme .hint {
+  font-size: 11px;
+  color: var(--mute);
+  text-align: center;
+  margin-top: 6px;
+}
+
+.sj-contact-theme .app {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 12px 14px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 80vh;
+}
+
+.sj-contact-theme h1 {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.sj-contact-theme h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.sj-contact-theme .muted {
+  color: var(--mute);
+  font-size: 14px;
+}
+
+.sj-contact-theme .top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 2px;
+}
+
+.sj-contact-theme .brand {
+  font-weight: 650;
+  color: var(--blue-d);
+  font-size: 18px;
+  letter-spacing: 0.2px;
+}
+
+.sj-contact-theme .live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--blue-d);
+  font-weight: 600;
+}
+
+.sj-contact-theme .live i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--blue-d);
+  animation: blink 1.6s infinite;
+}
+
+.sj-contact-theme .card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 14px 16px;
+}
+
+.sj-contact-theme .hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.sj-contact-theme .chip {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--blue-l);
+  color: var(--blue-d);
+}
+
+.sj-contact-theme .chip.red {
+  background: var(--red-l);
+  color: var(--red);
+}
+
+.sj-contact-theme .chip.mute {
+  background: var(--mapbg);
+  color: var(--mute);
+}
+
+.sj-contact-theme .mapw {
+  border-radius: var(--r);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--mapbg);
+  line-height: 0;
+  position: relative;
+}
+
+.sj-contact-theme .map {
+  height: min(46vh, 380px);
+  min-height: 260px;
+  width: 100%;
+}
+
+.sj-contact-theme .grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.sj-contact-theme .stat {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sj-contact-theme .stat span {
+  font-size: 12px;
+  color: var(--mute);
+}
+
+.sj-contact-theme .stat b {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.sj-contact-theme .bad {
+  color: var(--red);
+}
+
+.sj-contact-theme .vehicle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sj-contact-theme .vehicle div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sj-contact-theme .vehicle b {
+  font-size: 19px;
+  letter-spacing: 1px;
+}
+
+.sj-contact-theme .actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.sj-contact-theme .btn {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 14px;
+  padding: 13px 14px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.sj-contact-theme .btn:hover {
+  opacity: 0.95;
+}
+
+.sj-contact-theme .btn:active {
+  transform: scale(0.98);
+}
+
+.sj-contact-theme .btn.primary {
+  background: var(--blue);
+  border-color: transparent;
+  color: var(--on-blue);
+}
+
+.sj-contact-theme .btn.danger {
+  background: var(--red);
+  border-color: transparent;
+  color: #fff;
+}
+
+.sj-contact-theme .btn.sm {
+  padding: 8px 14px;
+  font-size: 14px;
+}
+
+.sj-contact-theme .banner {
+  background: var(--red-l);
+  border: 1px solid var(--red-b);
+  border-radius: var(--r);
+  padding: 14px 16px;
+  color: var(--red-t);
+  animation: shake 0.5s;
+}
+
+.sj-contact-theme .banner strong {
+  font-size: 17px;
+}
+
+.sj-contact-theme .banner p {
+  margin: 4px 0 12px;
+  font-size: 14px;
+}
+
+.sj-contact-theme .banner .row {
+  display: flex;
+  gap: 10px;
+}
+
+.sj-contact-theme .banner .btn {
+  flex: 1;
+}
+
+.sj-contact-theme .done {
+  text-align: center;
+  padding: 34px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+.sj-contact-theme .tick {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--blue);
+  color: var(--on-blue);
+  font-size: 28px;
+  display: grid;
+  place-items: center;
+}
+
+.sj-contact-theme .foot {
+  text-align: center;
+  font-size: 12px;
+  color: var(--mute);
+  padding-top: 6px;
+}
+
+.sj-contact-theme .toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--bg);
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+/* Map Pin & Pulse Animation */
+.pin {
+  position: relative;
+}
+
+.pin .pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--blue);
+  opacity: 0.6;
+  animation: pulse 2s infinite;
+}
+
+.pin .dot {
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: var(--blue-d);
+  border: 3px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+
+.pin.alert .pulse {
+  background: #F0A79F;
+}
+
+.pin.alert .dot {
+  background: var(--red);
+}
+
+.pin.stale .pulse {
+  display: none;
+}
+
+.pin.stale .dot {
+  background: #9A9288;
+}
+
+.recenter {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 600;
+  border: 0;
+  background: var(--card);
+  color: var(--blue-d);
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  cursor: pointer;
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.5); opacity: 0.7; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+@keyframes blink {
+  50% { opacity: 0.35; }
+}
+
+@keyframes shake {
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
