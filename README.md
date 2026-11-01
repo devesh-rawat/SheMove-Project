@@ -21,7 +21,7 @@ A modular, multi-tier safety ecosystem providing continuous telemetry monitoring
 
 | Documentation Block Index |
 | :---: |
-| [Overview](#system-overview) &bull; [Capabilities](#core-capabilities) &bull; [Architecture](#system-architecture) &bull; [Workflows](#operational-workflows) &bull; [Demo Script](#interactive-demo-guide) &bull; [Directory](#project-structure) &bull; [Setup](#installation--setup) &bull; [API](#api-specification) &bull; [Security](#security--privacy-architecture) &bull; [Design](#design-system--visual-elements) |
+| [Overview](#system-overview) &bull; [Capabilities](#core-capabilities) &bull; [Pitch Deck](#pitch-deck--presentation-slides) &bull; [Architecture](#system-architecture) &bull; [Workflows](#operational-workflows) &bull; [Demo Script](#interactive-demo-guide) &bull; [Directory](#project-structure) &bull; [Setup](#installation--setup) &bull; [API](#api-specification) &bull; [Security](#security--privacy-architecture) &bull; [Design](#design-system--visual-elements) |
 
 ---
 
@@ -107,6 +107,155 @@ SheMove replaces reactive triggering with **autonomous state evaluation and cove
 | **Backend** | Real-Time Broadcaster | Server-Sent Events (SSE) `/api/v1/police/stream` | Sub-second push synchronization to dispatchers and guardians |
 | **Guardians** | Zero-Install Tracker | Next.js dynamic routing `/t/[token]` | Instant web tracking for family members via SMS link without app download |
 | **Police CAD** | Command Dashboard | Next.js 15 interface with spatial station mapping | Unit allocation, incident acknowledgment, audio alert, and resolution |
+
+---
+
+## Pitch Deck & Presentation Slides
+
+> [!IMPORTANT]
+> **HackCBS 9.0 Official Pitch Deck** &bull; Project: **SHEmove** &bull; Team: **Eclipse**  
+> Direct Downloads: [Pitch Deck (.pptx)](docs/presentation/SheMove_HackCBS_9.0_PitchDeck.pptx) &bull; [Pitch Deck (.pdf)](docs/presentation/SheMove_HackCBS_9.0_PitchDeck.pdf)
+
+### Deck Navigation Index
+
+| Slide # | Slide Subject | Core Theme | Key Technical / Strategic Focus |
+| :---: | :--- | :--- | :--- |
+| **01** | [Project Title & Team Identity](#slide-01-project-title--team-identity) | Executive Summary | Team Eclipse &bull; Uttarakhand Technical University |
+| **02** | [Problem Landscape & Idea Overview](#slide-02-problem-landscape--idea-overview) | Empirical Evidence | 94% Travel Insecurity &bull; Dual-PIN Covert Distress |
+| **03** | [System Architecture & Workflow](#slide-03-system-architecture--workflow) | Technical Stack | Woman's App &bull; Journey Monitor &bull; CAD Console |
+| **04** | [Core Functional Capabilities](#slide-04-core-functional-capabilities) | 7-Pillar Architecture | Covert PIN &bull; Silent SOS &bull; Evidence Capture |
+| **05** | [Business Model & Market Viability](#slide-05-business-model--market-viability) | Unit Economics | SaaS Model &bull; B2B University &bull; Nirbhaya Fund |
+| **06** | [AI Engineering & Smart Intelligence](#slide-06-ai-engineering--smart-intelligence) | Algorithmic Safety | Community Safety Heatmap &bull; Adaptive Check-in |
+| **07** | [Future Innovation & Competitive Matrix](#slide-07-future-innovation--competitive-matrix) | Technology Horizon | Voice-Code SOS &bull; BLE Mesh Hopping &bull; 112 vs SHEmove |
+| **08** | [Closing Dedication & Mission](#slide-08-closing-dedication--mission) | Human Impact | Dedication to autonomous feminine mobility |
+
+---
+
+### Slide 01: Project Title & Team Identity
+
+<div align="center">
+  <img src="docs/presentation/slide-1.png" width="100%" alt="Slide 1 - Project Title and Team Identity" style="border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08); border: 1px solid #e2e8f0; margin-bottom: 14px;" />
+</div>
+
+| Attribute | Presentation Record |
+| :--- | :--- |
+| **Platform Name** | **SHEmove** (Integrated Women's Safety & Covert Telemetry Platform) |
+| **Hackathon Initiative** | **HackCBS 9.0** &bull; Open Innovation / Social Innovation Track |
+| **Team Name** | **Eclipse** |
+| **Institution** | **Uttarakhand Technical University** |
+| **Team Roster** | **Devesh Rawat** (Team Lead) &bull; **Pranjal Arya** &bull; **Deepika** &bull; **Jyoti Negi** |
+| **Mission Thesis** | Connecting women, emergency responders, and authorities through real-time telemetry, automated triage, and covert distress authentication. |
+
+---
+
+### Slide 02: Problem Landscape & Idea Overview
+
+<div align="center">
+  <img src="docs/presentation/slide-2.png" width="100%" alt="Slide 2 - Problem Landscape and Idea Overview" style="border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08); border: 1px solid #e2e8f0; margin-bottom: 14px;" />
+</div>
+
+| Analytical Dimension | Empirical Evidence & Strategic Solution |
+| :--- | :--- |
+| **Empirical Insecurity Metric** | **94% of women** report feeling unsafe traveling alone in India (Times of India travel safety survey). |
+| **Gender Commute Gap** | Only **42% of working women** in India travel $>1\text{ km}$ to work compared to **62% of men**, creating an artificial 20% gender commute handicap. |
+| **Crime Incident Frequency** | **1 crime against women is registered every 41 seconds** (2024–2025 NCRB national records), yet existing safety apps remain purely reactive. |
+| **The Core Innovation (USP)** | **Dual-PIN Covert Distress Authentication**: Standard PIN (`1234`) authorizes benign app actions; Duress PIN (`9999`) shows decoy normal status while covertly escalating telemetry to Police CAD 112. |
+| **Illustrated Storyboard** | User (Sarah) initiates safe commute $\to$ automated WhatsApp live link sent to family $\to$ Police station monitors unified live map $\to$ BLE offline safety beacons maintain continuity. |
+
+---
+
+### Slide 03: System Architecture & Workflow
+
+<div align="center">
+  <img src="docs/presentation/slide-3.png" width="100%" alt="Slide 3 - System Architecture and Workflow" style="border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08); border: 1px solid #e2e8f0; margin-bottom: 14px;" />
+</div>
+
+| Operational Stage | Technical Component | System Action & Privacy Guarantee |
+| :--- | :--- | :--- |
+| **1. Woman's App** | Client Interface (Flutter) | User registers trusted contacts, configures journey destination, and inputs PIN security profiles. |
+| **2. Journey Monitoring** | Background Telemetry Engine | High-frequency GPS breadcrumbs, periodic "Are you safe?" check-ins, and automated anomaly detection. |
+| **3. Safety Status** | Dynamic State Machine | Evaluates states: **Green** (Normal transit), **Yellow** (Potential anomaly / missed check-in), and **Red** (Immediate SOS / silent Duress). |
+| **4. Dashboards** | Multi-Stakeholder Consoles | **Guardian Portal**: Zero-install web tracking with WhatsApp link. **Police CAD 112**: Anonymized until Red escalation, ensuring complete transit privacy. |
+| **Technology Stack** | Full-Stack Ecosystem | Python, FastAPI, Next.js 15, React, Flutter, Dart, MongoDB Atlas, Tailwind CSS, PostGIS, Vercel. |
+
+---
+
+### Slide 04: Core Functional Capabilities
+
+<div align="center">
+  <img src="docs/presentation/slide-4.png" width="100%" alt="Slide 4 - Features of Project" style="border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08); border: 1px solid #e2e8f0; margin-bottom: 14px;" />
+</div>
+
+| Capability Pillar | Functional Specification | Operational Safety Impact |
+| :--- | :--- | :--- |
+| **Feature 01 &bull; Dual-PIN Security** | Distinct Regular vs. Duress PIN input profiles | Eliminates assailant coercion by providing decoy confirmation on forced disarm. |
+| **Feature 02 &bull; Emergency Escalation** | Automated multi-party alert dispatch | Instant notification broadcast to pre-configured trusted circles and Police 112 CAD. |
+| **Feature 03 &bull; Safe Route Navigation** | Dynamic waypoint optimization | Identifies verified transit corridors, well-lit pathways, and nearby assistance posts. |
+| **Feature 04 &bull; Silent SOS Trigger** | Covert activation protocols | Triggers high-priority backend alerts without audible alarms or screen indications. |
+| **Feature 05 &bull; Live Location Tracking** | High-precision vector telemetry | Continuously streams coordinates, bearing, altitude, speed, and battery health. |
+| **Feature 06 &bull; Smart Threat Detection** | Sensor anomaly analysis | Flags route deviations, sudden halts, and timed check-in lapses automatically. |
+| **Feature 07 &bull; Evidence Capture** | Cryptographic audit trail | Securely logs timestamps, coordinates, and emergency events for post-incident legal backing. |
+
+---
+
+### Slide 05: Business Model & Market Viability
+
+<div align="center">
+  <img src="docs/presentation/slide-5.png" width="100%" alt="Slide 5 - Business Model Canvas" style="border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08); border: 1px solid #e2e8f0; margin-bottom: 14px;" />
+</div>
+
+| Business Model Dimension | Commercial & Operational Strategy |
+| :--- | :--- |
+| **Unit Economics & SaaS Basis** | **₹30 / User / Month** proposed operational cloud, telemetry, and maintenance cost basis. |
+| **Direct B2C Subscriptions** | **₹49–₹99 / Month** individual premium tier &bull; **₹99–₹149 / Month** family multi-seat plan. |
+| **Institutional B2B Licensing** | Enterprise safety integrations for **1,168 Universities**, **45,473 Colleges**, and **2.19 Million Active Companies**. |
+| **Government & Public Sector (B2G)** | Municipal emergency integration with State Police Command Centers aligned with the **₹7,712.85 Cr Nirbhaya Fund**. |
+| **Target Addressable Population** | **70.9 Crore female population in India**, with **2.07 Crore women currently enrolled in higher education**. |
+| **Reliability Benchmark** | Designed for **99.5% operational uptime** across distributed edge services and datastore clusters. |
+
+---
+
+### Slide 06: AI Engineering & Smart Intelligence
+
+<div align="center">
+  <img src="docs/presentation/slide-6.png" width="100%" alt="Slide 6 - AI Engineering and Smart Check-in" style="border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08); border: 1px solid #e2e8f0; margin-bottom: 14px;" />
+</div>
+
+| Subsystem | Algorithmic Workflow & Operational Logic |
+| :--- | :--- |
+| **Community-Driven Safety Heatmap** | **1. User Feedback**: Women submit anonymous, voluntary safety reviews.<br/>**2. Spatial Aggregation**: Reports grouped into a 64-sector metropolitan ward mesh.<br/>**3. Choropleth Mapping**: Dynamic color-coded zones (**Green** Safe $\to$ **Yellow** Caution $\to$ **Orange** Alert $\to$ **Red/Purple** Danger Hotspot).<br/>**4. Safer Navigation**: Pedestrians view municipal zones to make proactive routing choices. |
+| **Smart Check-in & Adaptive Intervals** | **1. Journey Initiation**: User sets destination, estimated duration, and starting cadence.<br/>**2. Timed Prompt**: Discrete prompt asks "Are you safe?" with no button touch required when safe.<br/>**3. Input Evaluation**: Regular PIN (`1234`) maintains **Green**; Duress PIN (`9999`) covertly triggers **Red** CAD alert; No response triggers **Yellow** anomaly warning.<br/>**4. Adaptive Interval Engine**: Dynamically shortens check-in intervals when journey risk patterns elevate. |
+
+---
+
+### Slide 07: Future Innovation & Competitive Matrix
+
+<div align="center">
+  <img src="docs/presentation/slide-7.png" width="100%" alt="Slide 7 - Future Innovation and Comparison Matrix" style="border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08); border: 1px solid #e2e8f0; margin-bottom: 14px;" />
+</div>
+
+| Feature / Architecture Dimension | 112 India (ERSS) | My Safetipin | SHEmove (Our Platform) |
+| :--- | :---: | :---: | :---: |
+| **Emergency SOS Dispatch** | Yes | No | **Yes** |
+| **Live Location Telemetry** | Yes | Yes | **Yes** |
+| **Proactive Risk Prevention** | No | Yes | **Yes** |
+| **Community-Based Danger Mapping** | No | Yes | **Yes (64-Ward Contiguous Choropleth)** |
+| **Covert Duress / Dual-PIN Security** | No | No | **Yes (Decoy Toast + Silent Police CAD)** |
+| **Custom Voice-Code Activation (e.g., "Charlie")** | No | No | **Roadmap Feature** |
+| **Bluetooth Offline Mesh Hopping (BLE 30m)** | No | No | **Roadmap Feature** |
+| **User-Reported Danger Zone Crowdsourcing** | No | Yes | **Roadmap Feature** |
+| **Strategic Approach Paradigm** | *Purely Reactive* | *Purely Preventive* | **Unified: Both Reactive & Preventive** |
+
+---
+
+### Slide 08: Closing Dedication & Mission
+
+<div align="center">
+  <img src="docs/presentation/slide-8.png" width="100%" alt="Slide 8 - Closing Dedication" style="border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08); border: 1px solid #e2e8f0; margin-bottom: 14px;" />
+</div>
+
+> *"To every woman who has ever shared her location just to feel safe; we hope one day you won't have to."*  
+> &mdash; **Team Eclipse** &bull; HackCBS 9.0
 
 ---
 
