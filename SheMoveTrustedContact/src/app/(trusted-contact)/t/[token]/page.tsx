@@ -308,7 +308,12 @@ function ContactTrackingView() {
     return (
       <div className="contact-wrap">
         <main className="app" style={{ justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
-          <h1 className="brand" style={{ fontSize: '26px' }}>SafeJourney</h1>
+          <img
+            src="/app_icon.png"
+            alt="SheMove"
+            style={{ width: '64px', height: '64px', borderRadius: '16px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(124, 58, 237, 0.15)' }}
+          />
+          <h1 className="brand" style={{ fontSize: '26px' }}>SheMove SafeJourney</h1>
           <h2>Link unavailable</h2>
           <p className="muted">This tracking link is invalid or has expired. Ask the traveller to share a new one.</p>
         </main>
@@ -320,7 +325,12 @@ function ContactTrackingView() {
     return (
       <div className="contact-wrap">
         <main className="app" style={{ justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
-          <h1 className="brand" style={{ fontSize: '26px' }}>SafeJourney</h1>
+          <img
+            src="/app_icon.png"
+            alt="SheMove"
+            style={{ width: '64px', height: '64px', borderRadius: '16px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(124, 58, 237, 0.15)' }}
+          />
+          <h1 className="brand" style={{ fontSize: '26px' }}>SheMove SafeJourney</h1>
           <p className="muted">
             {error === 'network' ? 'Can’t reach the server. Retrying automatically…' : 'Loading journey…'}
           </p>
@@ -408,8 +418,25 @@ function ContactTrackingView() {
 
       <main className="app">
         {/* Top Brand Header */}
-        <header className="top">
-          <span className="brand">SafeJourney</span>
+        <header className="top" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <img
+              src="/app_icon.png"
+              alt="SheMove"
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '8px',
+                objectFit: 'cover',
+                boxShadow: '0 2px 8px rgba(124, 58, 237, 0.2)',
+                border: '1px solid #e2e8f0',
+              }}
+            />
+            <span className="brand" style={{ display: 'flex', alignItems: 'baseline', gap: '5px' }}>
+              <span>SheMove</span>
+              <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Escort</span>
+            </span>
+          </div>
           {!isEnded ? (
             <span className="live">
               <i />

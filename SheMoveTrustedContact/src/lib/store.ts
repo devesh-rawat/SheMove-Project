@@ -858,9 +858,17 @@ class PoliceStore {
           alert.acknowledged_at = new Date().toISOString();
         }
 
-        // Check if there are other open alerts on this trip
-        const hasOpenAlerts = trip.alerts.some((a) => a.status === 'OPEN' || a.status === 'ACKNOWLEDGED');
-        if (!hasOpenAlerts && trip.status === 'ALERT_RAISED') {
+        // Also resolve any remaining open alerts on this trip so the incident resolves cleanly
+        for (const otherA of trip.alerts) {
+          if (otherA.status === 'OPEN' || otherA.status === 'ACKNOWLEDGED') {
+            otherA.status = alert.status;
+            otherA.resolved_at = alert.resolved_at;
+            otherA.resolution_notes = notes;
+            otherA.resolution_outcome = outcome;
+            otherA.acknowledged_by = officerName;
+          }
+        }
+        if (trip.status === 'ALERT_RAISED') {
           trip.status = 'ACTIVE';
         }
 
@@ -869,6 +877,25 @@ class PoliceStore {
       }
     }
     return false;
+  }
+
+  public disarmTrip(tripId: string, actor: string = 'traveller'): Trip | null {
+    const trip = this.trips.get(tripId);
+    if (!trip) return null;
+    const now = new Date().toISOString();
+    for (const alt of trip.alerts) {
+      if (alt.status === 'OPEN' || alt.status === 'ACKNOWLEDGED') {
+        alt.status = 'RESOLVED';
+        alt.resolved_at = now;
+        alt.acknowledged_by = trip.traveller_name;
+        alt.resolution_notes = 'Disarmed by traveller with verified Safety PIN';
+        alt.resolution_outcome = 'DISARMED_SAFE';
+      }
+    }
+    trip.status = 'ACTIVE';
+    trip.last_heartbeat_at = now;
+    this.notify();
+    return trip;
   }
 
   public dispatchEmergencyUnit(

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import require_traveller
 from app.risk import assess_journey
-from app.schemas import CheckinIn, CompleteIn, ExtendIn, HeartbeatIn, JourneyStart, OfflineSyncIn, SosIn, VehicleIn
+from app.schemas import CheckinIn, CompleteIn, DisarmIn, ExtendIn, HeartbeatIn, JourneyStart, OfflineSyncIn, SosIn, VehicleIn
 from app.store import sanitize_trip, store
 
 router = APIRouter(prefix="/api/v1/journeys", tags=["journeys"])
@@ -125,16 +125,82 @@ def checkin(trip_id: str, body: CheckinIn, principal: dict = Depends(require_tra
 
 @router.post("/{trip_id}/sos")
 def sos(trip_id: str, body: SosIn, principal: dict = Depends(require_traveller)):
-    _owned(trip_id, principal["sub"])
+    user_id = principal["sub"]
+    trip = store.get_trip(trip_id)
+    if not trip or trip.get("traveller_id") != user_id:
+        trip = store.active_trip_for_user(user_id)
+    if not trip:
+        user = store.get_user(user_id)
+        if user:
+            trip = store.start_journey(user, {
+                "start_name": body.address or "Emergency Location",
+                "destination_name": "Emergency Services",
+                "lat": body.lat or 28.6139,
+                "lng": body.lng or 77.2090,
+                "accuracy_m": body.accuracy_m or 8,
+                "battery_pct": body.battery_pct or 80,
+                "transport_mode": "walking",
+                "estimated_minutes": 30,
+                "checkin_interval_minutes": 5,
+            })
+    if not trip:
+        raise HTTPException(status_code=404, detail="Journey not found")
+
     if body.pin:
         pin = store.verify_pin(principal["sub"], body.pin)
         if pin.get("duress"):
-            alert = store.trigger_duress_alert(trip_id)
-            return {"success": True, "alert": alert, "disguise": True, "trip": store.get_trip(trip_id)}
+            alert = store.trigger_duress_alert(
+                trip["id"],
+                lat=body.lat,
+                lng=body.lng,
+                accuracy_m=body.accuracy_m,
+                battery_pct=body.battery_pct,
+                address=body.address,
+            )
+            return {"success": True, "alert": alert, "disguise": True, "trip": store.get_trip(trip["id"])}
         if not pin["valid"]:
             raise HTTPException(status_code=400, detail="Invalid PIN")
-    alert = store.trigger_sos(trip_id, body.reason)
-    return {"success": True, "alert": alert, "trip": store.get_trip(trip_id)}
+    alert = store.trigger_sos(
+        trip["id"],
+        body.reason,
+        lat=body.lat,
+        lng=body.lng,
+        accuracy_m=body.accuracy_m,
+        battery_pct=body.battery_pct,
+        address=body.address,
+    )
+    return {"success": True, "alert": alert, "trip": store.get_trip(trip["id"])}
+
+
+@router.post("/{trip_id}/disarm")
+def disarm(trip_id: str, body: DisarmIn, principal: dict = Depends(require_traveller)):
+    user_id = principal["sub"]
+    trip = store.get_trip(trip_id) or store.active_trip_for_user(user_id)
+    if not trip:
+        raise HTTPException(status_code=404, detail="Journey not found")
+
+    pin_res = store.verify_pin(user_id, body.pin)
+    if not pin_res["valid"]:
+        raise HTTPException(status_code=400, detail="Invalid Security PIN")
+
+    if pin_res.get("duress"):
+        alert = store.trigger_duress_alert(trip["id"])
+        return {
+            "success": True,
+            "disarm": False,
+            "duress": True,
+            "message": "Alert disarmed",
+            "trip": store.get_trip(trip["id"]),
+        }
+
+    updated = store.disarm_trip(trip["id"], actor=user_id)
+    return {
+        "success": True,
+        "disarm": True,
+        "duress": False,
+        "message": "Emergency successfully disarmed with Safety PIN",
+        "trip": updated,
+    }
 
 
 @router.post("/{trip_id}/complete")

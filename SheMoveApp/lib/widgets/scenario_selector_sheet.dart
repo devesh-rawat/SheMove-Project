@@ -74,9 +74,23 @@ class ScenarioSelectorSheet extends StatelessWidget {
         icon: Icons.check_circle,
         badgeColor: AppColors.safeGreen,
       ),
+      const ScenarioOption(
+        id: 'route_deviation',
+        title: '7. Simulate Route Deviation (>500m)',
+        subtitle: 'Triggers off-corridor anomaly alert on Police CAD & Guardians',
+        icon: Icons.alt_route_rounded,
+        badgeColor: AppColors.warningAmber,
+      ),
+      const ScenarioOption(
+        id: 'kill_heartbeat',
+        title: '8. Phone Silent / Signal Lost',
+        subtitle: 'Simulates device cutoff; backend detects missed heartbeats',
+        icon: Icons.phonelink_erase_rounded,
+        badgeColor: AppColors.textSecondary,
+      ),
       ScenarioOption(
         id: 'toggle_offline',
-        title: isOnline ? '7. Simulate Cellular Network Loss' : '7. Reconnect Cellular Network',
+        title: isOnline ? '9. Simulate Cellular Network Loss' : '9. Reconnect Cellular Network',
         subtitle: isOnline
             ? 'Switches app to offline encrypted SMS mode'
             : 'Restores live cloud sync',

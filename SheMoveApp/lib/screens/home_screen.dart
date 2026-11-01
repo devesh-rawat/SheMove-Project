@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../config/app_config.dart';
 import '../models/models.dart';
 import '../theme/app_colors.dart';
 import '../widgets/circular_journey_launcher.dart';
@@ -35,9 +36,9 @@ class HomeScreen extends StatefulWidget {
     required this.contacts,
     required this.recentJourneys,
     this.currentLocation = const LatLngPoint(
-      latitude: 28.4595,
-      longitude: 77.0266,
-      address: 'MG Road, Sector 28, Gurugram',
+      latitude: 28.6139,
+      longitude: 77.2090,
+      address: 'Current Location',
     ),
     this.currentHeading = 0.0,
     required this.isOnline,
@@ -85,38 +86,67 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-            // 1. Top Header: User Greeting & Actions (NO letter profile icon)
+            // 1. Top Header: User Greeting & Actions (SheMove Brand Icon)
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
                     children: [
-                      Text(
-                        '${_getTimeGreeting()},',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
-                          letterSpacing: 0.2,
+                      Container(
+                        width: 44,
+                        height: 44,
+                        margin: const EdgeInsets.only(right: 12),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: isDark ? AppColors.midnightDarkSurfaceVariant : Colors.white,
+                          border: Border.all(
+                            color: isDark ? AppColors.midnightDarkCardBorder : AppColors.lightCardBorder,
+                            width: 1.5,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.primaryViolet.withValues(alpha: 0.12),
+                              blurRadius: 10,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: ClipOval(
+                          child: Image.asset(
+                            isDark ? 'assets/images/app_icon_dark.png' : 'assets/images/app_icon.png',
+                            fit: BoxFit.cover,
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        widget.userProfile.name,
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.3,
-                          color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${_getTimeGreeting()},',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              widget.userProfile.name,
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.3,
+                                color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Row(
+                              children: [
                           Container(
                             width: 7,
                             height: 7,
@@ -143,11 +173,14 @@ class _HomeScreenState extends State<HomeScreen> {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
+                            ],
+                          ),
                         ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
+              ),
                 const SizedBox(width: 8),
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -204,24 +237,40 @@ class _HomeScreenState extends State<HomeScreen> {
 
             // Offline or Covert Status Banners
             if (!widget.isOnline) ...[
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: AppColors.warningAmber.withValues(alpha: isDark ? 0.2 : 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.warningAmber),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.signal_cellular_off, color: AppColors.warningAmber, size: 20),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Offline Mode: Encrypted SMS & Mesh telemetry enabled',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+              InkWell(
+                onTap: widget.onOpenSettings,
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.warningAmber.withValues(alpha: isDark ? 0.2 : 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.warningAmber),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.cloud_off_rounded, color: AppColors.warningAmber, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Backend Disconnected • Tap to set Tunnel URL',
+                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.warningAmber),
+                            ),
+                            Text(
+                              'Connecting to: ${AppConfig.baseApiUrl}',
+                              style: TextStyle(fontSize: 10.5, color: isDark ? Colors.white70 : Colors.black87),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                      const Icon(Icons.arrow_forward_ios_rounded, color: AppColors.warningAmber, size: 14),
+                    ],
+                  ),
                 ),
               ),
               const SizedBox(height: 10),
@@ -255,10 +304,11 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 10),
             ],
 
-            // 5. Interactive Circular Journey Launcher Card
+            // 5. Interactive Route Preview Journey Launcher Card
             CircularJourneyLauncher(
               hasActiveJourney: widget.hasActiveJourney,
               activeJourney: widget.activeJourney,
+              currentAddress: widget.currentLocation.address,
               onStartJourney: widget.onStartJourneyClick,
               onViewActiveJourney: widget.onViewActiveJourney,
               onQuickEmergency: widget.onQuickEmergency,

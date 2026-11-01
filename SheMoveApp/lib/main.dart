@@ -228,7 +228,7 @@ class _SafeLoopMainScaffoldState extends State<SafeLoopMainScaffold> {
           initialStartPoint: state.currentLocation,
           onBack: () => state.navigateBack(),
           onOpenContacts: () => state.navigateTo(SafeLoopScreen.contacts),
-          onStartJourney: (start, dest, mode, vehicleNo, duration, interval, geofence, [selectedContactIds, waypoints]) {
+          onStartJourney: (start, dest, mode, vehicleNo, duration, interval, [selectedContactIds, waypoints]) {
             state.startJourney(
               start: start,
               destination: dest,
@@ -236,7 +236,6 @@ class _SafeLoopMainScaffoldState extends State<SafeLoopMainScaffold> {
               vehicleNo: vehicleNo,
               durationMinutes: duration,
               intervalMinutes: interval,
-              geofence: geofence,
               selectedContactIds: selectedContactIds,
               waypoints: waypoints,
             );
@@ -263,6 +262,16 @@ class _SafeLoopMainScaffoldState extends State<SafeLoopMainScaffold> {
             onBack: () => state.navigateTo(SafeLoopScreen.home),
             configuredSafetyPin: state.userProfile.safetyPin,
             configuredDuressPin: state.userProfile.duressPin,
+            onOpenScenarios: () => state.toggleScenarioPicker(true),
+            onSimulatedLocationUpdate:
+                (lat, lng, speed, heading, {progressPercent}) =>
+                    state.updateSimulatedLocation(
+                      lat,
+                      lng,
+                      speed,
+                      heading,
+                      progressPercent: progressPercent,
+                    ),
           );
         } else {
           return JourneySetupScreen(
@@ -272,7 +281,7 @@ class _SafeLoopMainScaffoldState extends State<SafeLoopMainScaffold> {
             initialStartPoint: state.currentLocation,
             onBack: () => state.navigateBack(),
             onOpenContacts: () => state.navigateTo(SafeLoopScreen.contacts),
-            onStartJourney: (start, dest, mode, vehicleNo, duration, interval, geofence, [selectedContactIds, waypoints]) {
+            onStartJourney: (start, dest, mode, vehicleNo, duration, interval, [selectedContactIds, waypoints]) {
               state.startJourney(
                 start: start,
                 destination: dest,
@@ -280,7 +289,6 @@ class _SafeLoopMainScaffoldState extends State<SafeLoopMainScaffold> {
                 vehicleNo: vehicleNo,
                 durationMinutes: duration,
                 intervalMinutes: interval,
-                geofence: geofence,
                 selectedContactIds: selectedContactIds,
                 waypoints: waypoints,
               );
@@ -362,8 +370,10 @@ class _SafeLoopMainScaffoldState extends State<SafeLoopMainScaffold> {
           key: const ValueKey('settings'),
           userProfile: state.userProfile,
           onUpdateProfile: (profile) => state.updateProfile(profile),
+          onUpdateBackendUrl: (url) => state.updateBackendUrl(url),
           onOpenScenarios: () => state.toggleScenarioPicker(true),
           onBack: () => state.navigateBack(),
+          onLogout: () => state.logout(),
         );
     }
   }

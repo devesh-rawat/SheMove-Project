@@ -142,7 +142,7 @@ def _user(user_id: str, name: str, phone: str, extra: dict | None = None) -> dic
             "SheMove Alert: I have not completed my safety check-in. "
             "Here is my live GPS location & route info."
         ),
-        "is_dark_mode": True,
+        "is_dark_mode": False,
         "is_setup_complete": True,
         "retention_days": 30,
         "created_at": sub_minutes(60 * 24 * 14),
@@ -170,9 +170,9 @@ def demo_contacts() -> list[dict]:
         {
             "id": "c-aanya-01",
             "user_id": "user-aanya",
-            "name": "Meera Rao",
-            "phone": "+91 98100 11223",
-            "relation": "Mother",
+            "name": "Trusted Guardian",
+            "phone": "+91 8077587054",
+            "relation": "Guardian",
             "notify_whatsapp": True,
             "smsStatus": "DELIVERED",
             "is_primary": True,
@@ -259,9 +259,9 @@ def create_initial_trips() -> list[dict]:
         "contacts": [
             {
                 "id": "c-01",
-                "name": "Sunita Sharma",
-                "phone": "+91 98102 34567",
-                "relation": "Mother",
+                "name": "Guardian (You)",
+                "phone": "+91 8077587054",
+                "relation": "Guardian",
                 "notify_whatsapp": True,
                 "smsStatus": "LINK_OPENED",
                 "is_primary": True,
@@ -638,4 +638,11 @@ def create_initial_trips() -> list[dict]:
         "waypoints": [],
     }
 
-    return [trip1, trip2, trip3, trip4, trip5, trip6]
+    initial_trips = [trip1, trip2, trip3, trip4, trip5, trip6]
+    for t in initial_trips:
+        t["is_simulation"] = True
+        t["source"] = "demo"
+        for a in t.get("alerts", []):
+            a["is_simulation"] = True
+            a["source"] = "demo"
+    return initial_trips

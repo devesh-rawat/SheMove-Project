@@ -55,6 +55,30 @@ export const AlertsQueuePanel: React.FC<AlertsQueuePanelProps> = ({
     return true;
   });
 
+  // Group and deduplicate alerts per trip so each active trip has exactly 1 primary incident card
+  const consolidatedAlerts = React.useMemo(() => {
+    const tripMap = new Map<string, { alert: Alert; count: number }>();
+    const severityScore = (s: string) => (s === 'CRITICAL' ? 3 : s === 'HIGH' ? 2 : 1);
+
+    for (const alt of filteredAlerts) {
+      const existing = tripMap.get(alt.trip_id);
+      if (!existing) {
+        tripMap.set(alt.trip_id, { alert: alt, count: 1 });
+      } else {
+        existing.count += 1;
+        const currentScore = severityScore(existing.alert.severity);
+        const newScore = severityScore(alt.severity);
+        if (
+          newScore > currentScore ||
+          (newScore === currentScore && new Date(alt.raised_at) > new Date(existing.alert.raised_at))
+        ) {
+          existing.alert = alt;
+        }
+      }
+    }
+    return Array.from(tripMap.values());
+  }, [filteredAlerts]);
+
   const openAlertsCount = alerts.filter((a) => a.status === 'OPEN').length;
   const criticalCount = alerts.filter((a) => a.status === 'OPEN' && a.severity === 'CRITICAL').length;
   const highCount = alerts.filter((a) => a.status === 'OPEN' && a.severity === 'HIGH').length;
@@ -226,7 +250,7 @@ export const AlertsQueuePanel: React.FC<AlertsQueuePanelProps> = ({
       {/* Content Area */}
       <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-2">
         {activeTab === 'alerts' ? (
-          filteredAlerts.length === 0 ? (
+          consolidatedAlerts.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-4"
                 style={{ background: '#052e1640', border: '1px solid #14532d40' }}>
@@ -236,11 +260,15 @@ export const AlertsQueuePanel: React.FC<AlertsQueuePanelProps> = ({
               <div className="text-xs mt-1" style={{ color: '#334155' }}>No active alerts in this view</div>
             </div>
           ) : (
-            filteredAlerts.map((alt) => {
+            consolidatedAlerts.map(({ alert: alt, count }) => {
               const isSelected = alt.trip_id === selectedTripId;
               const isCritical = alt.severity === 'CRITICAL';
               const isOpen = alt.status === 'OPEN';
               const colors = severityColors[alt.severity] || severityColors.MEDIUM;
+              const parentTrip = trips.find((t) => t.id === alt.trip_id);
+              const isRealUser = parentTrip
+                ? parentTrip.is_simulation === false || parentTrip.source === 'mobile_app'
+                : alt.is_simulation === false || alt.source === 'mobile_app';
 
               return (
                 <div
@@ -279,6 +307,17 @@ export const AlertsQueuePanel: React.FC<AlertsQueuePanelProps> = ({
                         style={{ background: colors.bg, color: colors.text, border: `1px solid ${colors.border}` }}>
                         {alt.severity}
                       </span>
+                      {count > 1 && (
+                        <span className="text-[8px] font-black px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/40">
+                          {count} INCIDENTS
+                        </span>
+                      )}
+                      {isRealUser && (
+                        <span className="flex items-center gap-1 text-[8px] font-black px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          LIVE APP
+                        </span>
+                      )}
                     </div>
                     <span className="text-[10px] font-mono shrink-0" style={{ color: '#475569' }}>
                       {formatElapsed(alt.raised_at)} ago
@@ -287,7 +326,9 @@ export const AlertsQueuePanel: React.FC<AlertsQueuePanelProps> = ({
 
                   <div className="flex items-center justify-between mb-2 pl-1">
                     <div>
-                      <div className="text-xs font-bold text-white">{alt.snapshot.traveller_name}</div>
+                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                        {alt.snapshot.traveller_name}
+                      </div>
                       <div className="text-[10px] font-mono mt-0.5" style={{ color: '#475569' }}>
                         {alt.snapshot.traveller_phone}
                       </div>

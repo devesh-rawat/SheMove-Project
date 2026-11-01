@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { forwardToBackend } from '@/lib/backend';
 import { policeStore } from '@/lib/store';
 
 // Default PIN settings
@@ -45,7 +46,11 @@ export async function GET(
   { params }: { params: Promise<{ token: string }> }
 ) {
   const { token } = await params;
+  const backendRes = await forwardToBackend(req, `/api/v1/public/track/${token}`);
+  if (backendRes) return backendRes;
+
   const trip = policeStore.getTripByToken(token);
+
 
   if (!trip) {
     return NextResponse.json(
@@ -65,10 +70,14 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ token: string }> }
 ) {
+  const { token } = await params;
+  const backendRes = await forwardToBackend(req, `/api/v1/public/track/${token}`);
+  if (backendRes) return backendRes;
+
   try {
-    const { token } = await params;
     const body = await req.json();
     const { action } = body;
+
 
     const trip = policeStore.getTripByToken(token);
     if (!trip) {

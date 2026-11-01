@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/vibration_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/numeric_pin_pad.dart';
 import '../widgets/swipe_action_control.dart';
@@ -44,11 +45,13 @@ class _CheckInModalScreenState extends State<CheckInModalScreen>
     _pulseAnimation = Tween<double>(begin: 0.94, end: 1.06).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+    VibrationService().vibrateCheckInAlert();
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    VibrationService().stopVibration();
     super.dispose();
   }
 

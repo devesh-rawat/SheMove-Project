@@ -77,9 +77,7 @@ export default function PoliceDashboardPage() {
         try {
           const parsed = JSON.parse(savedOfficer);
           setCurrentOfficer(parsed);
-          if (parsed.stationId && parsed.stationId !== 'all') {
-            setSelectedStationId(parsed.stationId);
-          }
+          // Default remains 'all' so that real mobile app users and all stations appear immediately
         } catch {
           // keep default
         }
@@ -149,8 +147,21 @@ export default function PoliceDashboardPage() {
             let filteredAlerts = payload.alerts as Alert[];
 
             if (selectedStationId !== 'all') {
-              filteredTrips = filteredTrips.filter((t) => t.current_station_id === selectedStationId);
-              filteredAlerts = filteredAlerts.filter((a) => a.station_id === selectedStationId);
+              filteredTrips = filteredTrips.filter(
+                (t) =>
+                  t.current_station_id === selectedStationId ||
+                  t.status === 'ALERT_RAISED' ||
+                  t.is_simulation === false ||
+                  t.source === 'mobile_app'
+              );
+              filteredAlerts = filteredAlerts.filter(
+                (a) =>
+                  a.station_id === selectedStationId ||
+                  a.status === 'OPEN' ||
+                  a.severity === 'CRITICAL' ||
+                  a.is_simulation === false ||
+                  a.source === 'mobile_app'
+              );
             }
 
             setTrips(filteredTrips);

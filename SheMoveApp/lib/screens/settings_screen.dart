@@ -3,20 +3,25 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models/models.dart';
+import '../services/api_service.dart';
 import '../theme/app_colors.dart';
 
 class SettingsScreen extends StatefulWidget {
   final UserProfile userProfile;
   final ValueChanged<UserProfile> onUpdateProfile;
+  final ValueChanged<String>? onUpdateBackendUrl;
   final VoidCallback onOpenScenarios;
   final VoidCallback? onBack;
+  final VoidCallback? onLogout;
 
   const SettingsScreen({
     super.key,
     required this.userProfile,
     required this.onUpdateProfile,
+    this.onUpdateBackendUrl,
     required this.onOpenScenarios,
     this.onBack,
+    this.onLogout,
   });
 
   @override
@@ -101,6 +106,140 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: const Text('Save'),
             ),
           ],
+        );
+      },
+    );
+  }
+
+  void _showBackendUrlDialog() {
+    final urlCtrl = TextEditingController(text: ApiService().baseUrl);
+    bool isTesting = false;
+    String? testResult;
+    bool? testSuccess;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Backend Server & Tunnel Link'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'When testing on a physical Android phone using tunneling (e.g. ngrok, localtunnel), enter your active HTTPS URL below:',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: urlCtrl,
+                      keyboardType: TextInputType.url,
+                      decoration: InputDecoration(
+                        labelText: 'Base API URL',
+                        hintText: 'https://xxxx.ngrok-free.app',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.clear, size: 18),
+                          onPressed: () => urlCtrl.clear(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    if (isTesting)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8),
+                        child: Row(
+                          children: [
+                            SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                            SizedBox(width: 10),
+                            Text('Testing /health endpoint...', style: TextStyle(fontSize: 12)),
+                          ],
+                        ),
+                      )
+                    else if (testResult != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: (testSuccess == true ? AppColors.safeGreen : AppColors.emergencyRed)
+                              .withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              testSuccess == true ? Icons.check_circle : Icons.error_outline,
+                              color: testSuccess == true ? AppColors.safeGreen : AppColors.emergencyRed,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                testResult!,
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: testSuccess == true ? AppColors.safeGreen : AppColors.emergencyRed,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isTesting
+                      ? null
+                      : () async {
+                          setDialogState(() {
+                            isTesting = true;
+                            testResult = null;
+                          });
+                          final ok = await ApiService().testUrl(urlCtrl.text.trim());
+                          setDialogState(() {
+                            isTesting = false;
+                            testSuccess = ok;
+                            testResult = ok
+                                ? 'Connected: SheMove Backend Online'
+                                : 'Connection failed. Verify URL is running.';
+                          });
+                        },
+                  child: const Text('Test Connection'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final trimmed = urlCtrl.text.trim();
+                    if (trimmed.isNotEmpty) {
+                      ApiService().setBaseUrl(trimmed);
+                      if (widget.onUpdateBackendUrl != null) {
+                        widget.onUpdateBackendUrl!(trimmed);
+                      }
+                      setState(() {});
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Backend API URL updated to $trimmed'),
+                          behavior: SnackBarBehavior.floating,
+                          backgroundColor: AppColors.safeGreen,
+                        ),
+                      );
+                    }
+                  },
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.primaryViolet,
+                  ),
+                  child: const Text('Save & Connect'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -489,6 +628,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 18),
 
+            // Backend Server & Tunnel URL Section (For Android Tunneling / Debugging)
+            _buildSectionHeader('Backend Server & Tunnel Link', isDark),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: _cardDecoration(isDark),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(
+                      Icons.cloud_sync_rounded,
+                      color: AppColors.primaryCobalt,
+                    ),
+                    title: const Text(
+                      'Base API URL',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      ApiService().baseUrl,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        color: AppColors.safeGreen,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: const Icon(
+                      Icons.edit,
+                      size: 18,
+                      color: AppColors.primaryCobalt,
+                    ),
+                    onTap: () => _showBackendUrlDialog(),
+                  ),
+                  const Text(
+                    'Active link for Android phone testing with tunneling (ngrok, localtunnel, etc.). Tap edit to update or test connection live.',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+
             // Emergency SMS Message Template
             _buildSectionHeader('Emergency SMS Template', isDark),
             const SizedBox(height: 8),
@@ -516,10 +701,78 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 18),
+
+            // Account & Session Management
+            _buildSectionHeader('Account & Session', isDark),
+            const SizedBox(height: 8),
+            Container(
+              decoration: _cardDecoration(isDark),
+              child: ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.emergencyRed.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.logout_rounded, color: AppColors.emergencyRed, size: 20),
+                ),
+                title: const Text(
+                  'Log Out',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.emergencyRed,
+                  ),
+                ),
+                subtitle: Text(
+                  'Signed in as ${widget.userProfile.name.isNotEmpty ? widget.userProfile.name : "Active User"} (${widget.userProfile.phone})',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? AppColors.textMuted : AppColors.lightTextSecondary,
+                  ),
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: AppColors.emergencyRed),
+                onTap: _showLogoutConfirmDialog,
+              ),
+            ),
+            const SizedBox(height: 32),
           ],
         ),
       ),
+    );
+  }
+
+  void _showLogoutConfirmDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.logout_rounded, color: AppColors.emergencyRed),
+              SizedBox(width: 8),
+              Text('Log Out?'),
+            ],
+          ),
+          content: Text(
+            'Are you sure you want to log out of ${widget.userProfile.name}? Your local session and PIN cache will be cleared, and you will be returned to onboarding.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: AppColors.emergencyRed),
+              onPressed: () {
+                Navigator.pop(ctx);
+                widget.onLogout?.call();
+              },
+              child: const Text('Log Out'),
+            ),
+          ],
+        );
+      },
     );
   }
 

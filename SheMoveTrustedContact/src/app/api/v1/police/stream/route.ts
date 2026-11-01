@@ -1,7 +1,12 @@
+import { forwardSseToBackend } from '@/lib/backend';
 import { policeStore } from '@/lib/store';
 
 export async function GET() {
+  const backendStream = await forwardSseToBackend('/api/v1/police/stream');
+  if (backendStream) return backendStream;
+
   const encoder = new TextEncoder();
+
 
   const stream = new ReadableStream({
     start(controller) {

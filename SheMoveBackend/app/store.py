@@ -83,7 +83,7 @@ def public_user(user: dict) -> dict:
         "default_checkin_minutes": user.get("default_checkin_minutes", 10),
         "adaptive_frequency_enabled": user.get("adaptive_frequency_enabled", True),
         "emergency_message": user.get("emergency_message"),
-        "is_dark_mode": user.get("is_dark_mode", True),
+        "is_dark_mode": user.get("is_dark_mode", False),
         "is_setup_complete": user.get("is_setup_complete", False),
         "retention_days": user.get("retention_days", 30),
         "has_safety_pin": bool(user.get("safety_pin_hash")),
@@ -174,21 +174,45 @@ class SheMoveStore:
         self.audit = self.audit[:500]
 
     def _notify_contacts(self, trip: dict, channel: str, message: str, kind: str) -> None:
+        from app.twilio_service import send_sms, send_whatsapp, build_alert_message
+
+        sms_body = build_alert_message(
+            traveller_name=trip.get("traveller_name", "Traveller"),
+            kind=kind,
+            share_token=trip.get("share_token", ""),
+            location=trip.get("last_location"),
+            custom_reason=message if kind not in {"JOURNEY_STARTED", "SAFE_ARRIVAL"} else None,
+        )
+
         for contact in trip.get("contacts") or []:
+            phone = contact.get("phone")
+            status = "SENT"
+            if phone:
+                # Send WhatsApp (if enabled for this contact, defaults to True)
+                wa_ok = False
+                if contact.get("notify_whatsapp", True):
+                    wa_ok = send_whatsapp(phone, sms_body)
+                    contact["whatsappStatus"] = "SENT" if wa_ok else "FAILED"
+
+                # Also send SMS
+                sms_ok = send_sms(phone, sms_body)
+                contact["smsStatus"] = "SENT" if sms_ok else "FAILED"
+
+                status = "SENT" if (wa_ok or sms_ok) else "FAILED"
+
             record = {
                 "id": f"ntf-{secrets.token_hex(4)}",
                 "trip_id": trip["id"],
                 "contact_id": contact.get("id"),
                 "contact_name": contact.get("name"),
-                "channel": channel,
+                "channel": "whatsapp+sms" if contact.get("notify_whatsapp", True) else channel,
                 "kind": kind,
-                "message": message,
-                "status": "SENT",
+                "message": sms_body,
+                "status": status,
                 "acknowledged": False,
                 "created_at": iso(),
             }
             self.notifications.insert(0, record)
-            contact["smsStatus"] = "SENT"
         self._audit("system", "NOTIFY", message, {"trip_id": trip["id"], "kind": kind})
 
     def get_stations(self) -> list[dict]:
@@ -265,7 +289,7 @@ class SheMoveStore:
             "adaptive_frequency_enabled": True,
             "emergency_message": payload.get("emergency_message")
             or "SheMove Alert: I have not completed my safety check-in.",
-            "is_dark_mode": True,
+            "is_dark_mode": False,
             "is_setup_complete": True,
             "retention_days": 30,
             "created_at": iso(),
@@ -376,7 +400,15 @@ class SheMoveStore:
     def get_trips(self, station_id: str | None = None, status_filter: str | None = None) -> list[dict]:
         items = list(self.trips.values())
         if station_id and station_id != "all":
-            items = [t for t in items if t.get("current_station_id") == station_id]
+            # Keep trips in jurisdiction OR active emergency alerts OR real mobile app trips
+            items = [
+                t
+                for t in items
+                if t.get("current_station_id") == station_id
+                or t.get("status") == "ALERT_RAISED"
+                or not t.get("is_simulation", True)
+                or t.get("source") == "mobile_app"
+            ]
         if status_filter and status_filter != "ALL":
             if status_filter == "ALERT":
                 items = [t for t in items if t.get("status") == "ALERT_RAISED"]
@@ -415,8 +447,11 @@ class SheMoveStore:
         alerts: list[dict] = []
         for trip in self.trips.values():
             for alert in trip.get("alerts") or []:
-                if station_id and station_id != "all" and alert.get("station_id") != station_id:
-                    continue
+                if station_id and station_id != "all":
+                    is_real = not alert.get("is_simulation", True) or alert.get("source") == "mobile_app" or not trip.get("is_simulation", True)
+                    is_urgent = alert.get("status") == "OPEN" or alert.get("severity") == "CRITICAL"
+                    if alert.get("station_id") != station_id and not (is_real or is_urgent):
+                        continue
                 if status_filter and status_filter != "ALL" and alert.get("status") != status_filter:
                     continue
                 if severity_filter and severity_filter != "ALL" and alert.get("severity") != severity_filter:
@@ -468,11 +503,22 @@ class SheMoveStore:
             (
                 a
                 for a in trip.get("alerts") or []
-                if a.get("type") == alert_type and a.get("status") in {"OPEN", "ACKNOWLEDGED"}
+                if a.get("status") in {"OPEN", "ACKNOWLEDGED"}
+                and (a.get("type") == alert_type or alert_type == "SOS")
             ),
             None,
         )
-        if existing and alert_type != "SOS":
+        if existing:
+            if alert_type == "SOS":
+                existing["type"] = "SOS"
+                existing["severity"] = "CRITICAL"
+            existing["raised_at"] = iso()
+            existing["location"] = dict(trip.get("last_location") or {})
+            if reason:
+                existing["reason"] = reason
+            existing["snapshot"] = self._trip_snapshot(trip)
+            trip["status"] = "ALERT_RAISED"
+            self.notify()
             return existing
         alert = {
             "id": f"alt-{alert_type.lower()}-{secrets.token_hex(3)}",
@@ -486,6 +532,8 @@ class SheMoveStore:
             "station_name": trip.get("current_station_name"),
             "covert": covert,
             "reason": reason,
+            "is_simulation": trip.get("is_simulation", False),
+            "source": trip.get("source", "mobile_app"),
             "snapshot": self._trip_snapshot(trip),
         }
         trip.setdefault("alerts", []).insert(0, alert)
@@ -504,7 +552,12 @@ class SheMoveStore:
     def start_journey(self, user: dict, payload: dict) -> dict:
         existing = self.active_trip_for_user(user["id"])
         if existing:
-            raise ValueError("An active protected journey already exists")
+            # Auto-complete leftover stale active trip so new trip starts cleanly
+            try:
+                self.complete_trip(existing["id"], confirmed_safe=True)
+            except Exception:
+                existing["status"] = "COMPLETED"
+                existing["completed_at"] = iso()
         now = iso()
         duration_min = int(payload.get("estimated_minutes") or payload.get("expected_duration_s", 1500) / 60)
         interval = int(payload.get("checkin_interval_minutes") or user.get("default_checkin_minutes") or 7)
@@ -543,6 +596,8 @@ class SheMoveStore:
             "traveller_phone": user["phone"],
             "status": status,
             "started_at": now,
+            "is_simulation": False,
+            "source": "mobile_app",
             "expected_duration_s": duration_min * 60,
             "ends_at": add_minutes(duration_min),
             "start_name": payload.get("start_name") or payload.get("start_address") or "Current location",
@@ -778,16 +833,70 @@ class SheMoveStore:
         self._raise_alert(trip, "USER_REPORTED_UNSAFE", "CRITICAL", reason="Traveller reported feeling unsafe")
         return True
 
-    def trigger_sos(self, trip_id: str, reason: str = "Manual SOS") -> dict | None:
-        trip = self.trips.get(trip_id)
+    def trigger_sos(
+        self,
+        trip_id: str,
+        reason: str = "Manual SOS",
+        lat: float | None = None,
+        lng: float | None = None,
+        accuracy_m: float | None = None,
+        battery_pct: int | None = None,
+        address: str | None = None,
+    ) -> dict | None:
+        trip = self.trips.get(trip_id) or self.get_trip_by_token(trip_id)
         if not trip:
             return None
+        if lat is not None and lng is not None:
+            trip["last_location"] = {"lat": lat, "lng": lng}
+            if accuracy_m is not None:
+                trip["last_accuracy_m"] = accuracy_m
+            if battery_pct is not None:
+                trip["last_battery_pct"] = battery_pct
+            if address:
+                trip["current_address"] = address
+            # Reassign police station jurisdiction according to actual alert coordinates
+            station = assign_station(lat, lng, self.stations)
+            if station:
+                trip["current_station_id"] = station["id"]
+                trip["current_station_name"] = station["name"]
+            trip.setdefault("location_history", []).append({
+                "id": f"lp-{secrets.token_hex(3)}",
+                "lat": lat,
+                "lng": lng,
+                "accuracy_m": accuracy_m or 8.0,
+                "speed_kmh": 0,
+                "heading": 0,
+                "battery_pct": battery_pct or trip.get("last_battery_pct", 80),
+                "is_charging": False,
+                "network": "GPS",
+                "recorded_at": iso(),
+            })
         return self._raise_alert(trip, "SOS", "CRITICAL", reason=reason)
 
-    def trigger_duress_alert(self, token_or_id: str) -> dict | None:
+    def trigger_duress_alert(
+        self,
+        token_or_id: str,
+        lat: float | None = None,
+        lng: float | None = None,
+        accuracy_m: float | None = None,
+        battery_pct: int | None = None,
+        address: str | None = None,
+    ) -> dict | None:
         trip = self.get_trip_by_token(token_or_id) or self.get_trip(token_or_id)
         if not trip:
             return None
+        if lat is not None and lng is not None:
+            trip["last_location"] = {"lat": lat, "lng": lng}
+            if accuracy_m is not None:
+                trip["last_accuracy_m"] = accuracy_m
+            if battery_pct is not None:
+                trip["last_battery_pct"] = battery_pct
+            if address:
+                trip["current_address"] = address
+            station = assign_station(lat, lng, self.stations)
+            if station:
+                trip["current_station_id"] = station["id"]
+                trip["current_station_name"] = station["name"]
         return self._raise_alert(
             trip,
             "SOS",
@@ -837,13 +946,63 @@ class SheMoveStore:
             if not alert.get("acknowledged_by"):
                 alert["acknowledged_by"] = officer_name
                 alert["acknowledged_at"] = iso()
-            has_open = any(a.get("status") in {"OPEN", "ACKNOWLEDGED"} for a in trip.get("alerts") or [])
-            if not has_open and trip.get("status") == "ALERT_RAISED":
+            # Also resolve any remaining open alerts on this trip so the incident resolves cleanly
+            for other_a in trip.get("alerts") or []:
+                if other_a.get("status") in {"OPEN", "ACKNOWLEDGED"}:
+                    other_a["status"] = alert["status"]
+                    other_a["resolved_at"] = alert["resolved_at"]
+                    other_a["resolution_notes"] = notes
+                    other_a["resolution_outcome"] = outcome
+                    other_a["acknowledged_by"] = officer_name
+            if trip.get("status") == "ALERT_RAISED":
                 trip["status"] = "ACTIVE"
             self._audit(officer_name, "ALERT_RESOLVE", notes, {"alert_id": alert_id, "outcome": outcome})
             self.notify()
             return True
         return False
+
+    def disarm_trip(self, trip_id: str, actor: str = "traveller") -> dict | None:
+        trip = self.trips.get(trip_id) or self.get_trip_by_token(trip_id)
+        if not trip:
+            return None
+        now = iso()
+        # 1. Resolve all open alerts on this trip
+        for alert in trip.get("alerts") or []:
+            if alert.get("status") in {"OPEN", "ACKNOWLEDGED"}:
+                alert["status"] = "RESOLVED"
+                alert["resolved_at"] = now
+                alert["resolved_by"] = trip.get("traveller_name", "Traveller")
+                alert["resolution_notes"] = "Disarmed by traveller with verified Safety PIN"
+                alert["resolution_outcome"] = "DISARMED_SAFE"
+
+        # 2. Restore journey status back to safe ACTIVE status
+        trip["status"] = "ACTIVE"
+        trip["last_heartbeat_at"] = now
+
+        # 3. Reset check-in timers to fresh interval
+        interval = trip.get("checkin_interval_minutes") or 7
+        trip["next_checkin_due_at"] = add_minutes(interval)
+        trip["checkin_deadline_at"] = add_minutes(interval + 1)
+
+        # 4. Add safety event
+        trip.setdefault("events", []).insert(0, {
+            "id": f"ev-{secrets.token_hex(3)}",
+            "timestamp": now,
+            "title": "Emergency Disarmed with PIN",
+            "description": f"{trip.get('traveller_name', 'Traveller')} confirmed safety with security PIN. Active protection resumed.",
+            "severity": "success",
+        })
+
+        # 5. Notify contacts
+        self._notify_contacts(
+            trip,
+            "push",
+            f"{trip.get('traveller_name', 'Traveller')} confirmed safety with security PIN. Journey safe and active.",
+            "DISARMED_SAFE",
+        )
+        self._audit(actor, "DISARM", f"Emergency disarmed with Safety PIN on trip {trip_id}")
+        self.notify()
+        return trip
 
     def dispatch_unit(
         self,
@@ -910,6 +1069,37 @@ class SheMoveStore:
 
     def simulate_complete_trip(self, trip_id: str) -> bool:
         return bool(self.complete_trip(trip_id, True))
+
+    def simulate_route_deviation(self, target_trip_id: str | None = None) -> dict | None:
+        trip = self.trips.get(target_trip_id) if target_trip_id else next(
+            (t for t in self.trips.values() if t.get("status") in {"ACTIVE", "CHECKIN_PENDING"}), None
+        )
+        if not trip:
+            return None
+        last = trip.get("last_location") or {"lat": 28.61, "lng": 77.20}
+        dev_lat = round(last["lat"] + 0.0125, 6)
+        dev_lng = round(last["lng"] - 0.0145, 6)
+        trip["last_location"] = {"lat": dev_lat, "lng": dev_lng}
+        trip.setdefault("location_history", []).append({
+            "id": f"lp-{secrets.token_hex(3)}",
+            "lat": dev_lat,
+            "lng": dev_lng,
+            "accuracy_m": 8.0,
+            "speed_kmh": 46.0,
+            "heading": 285,
+            "battery_pct": max(10, (trip.get("last_battery_pct") or 75) - 1),
+            "is_charging": False,
+            "network": "GPS",
+            "recorded_at": iso(),
+        })
+        trip.setdefault("events", []).append({
+            "id": f"ev-{secrets.token_hex(3)}",
+            "timestamp": iso(),
+            "title": "Route Deviation Detected",
+            "description": "Vehicle deviated >500m from planned route corridor",
+            "severity": "high",
+        })
+        return self._raise_alert(trip, "ROUTE_DEVIATION", "HIGH", reason="Vehicle deviated >500m from designated route corridor")
 
     def simulate_advance_location(self, trip_id: str) -> bool:
         trip = self.trips.get(trip_id)

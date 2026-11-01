@@ -74,9 +74,13 @@ export const PoliceHeader: React.FC<PoliceHeaderProps> = ({
 
       {/* Left: Brand */}
       <div className="flex items-center gap-3 shrink-0">
-        <div className="relative flex items-center justify-center w-9 h-9 rounded-xl shadow-xl"
-          style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)', boxShadow: '0 0 20px #ef444450' }}>
-          <ShieldAlert className="w-5 h-5 text-white" />
+        <div className="relative flex items-center justify-center w-10 h-10 rounded-xl shadow-xl overflow-hidden border border-white/10"
+          style={{ background: '#0f172a', boxShadow: hasCritical ? '0 0 20px #ef444450' : '0 0 20px #7c3aed40' }}>
+          <img
+            src="/app_icon_dark.png"
+            alt="SheMove"
+            className="w-full h-full object-cover"
+          />
           {hasCritical && (
             <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-80" />
@@ -87,8 +91,8 @@ export const PoliceHeader: React.FC<PoliceHeaderProps> = ({
         <div>
           <div className="flex items-center gap-2">
             <span className="font-bold text-sm tracking-wide"
-              style={{ fontFamily: "'Outfit', sans-serif", background: 'linear-gradient(135deg, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              SafeJourney CAD
+              style={{ fontFamily: "'Outfit', sans-serif", background: 'linear-gradient(135deg, #fff, #c084fc)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+              SheMove CAD
             </span>
             <span className="text-[9px] uppercase font-black tracking-widest px-1.5 py-0.5 rounded-md"
               style={{ background: '#ef444420', color: '#f87171', border: '1px solid #ef444440' }}>

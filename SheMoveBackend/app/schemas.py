@@ -127,6 +127,13 @@ class CheckinIn(BaseModel):
 class SosIn(BaseModel):
     reason: str = "Manual SOS"
     pin: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    accuracy_m: float | None = None
+    battery_pct: int | None = None
+    speed_kmh: float | None = None
+    heading: float | None = None
+    address: str | None = None
 
 
 class CompleteIn(BaseModel):
@@ -165,6 +172,16 @@ class DispatchIn(BaseModel):
     notes: str | None = None
 
 
+class DisarmIn(BaseModel):
+    pin: str
+
+
 class SimulateIn(BaseModel):
     action: str
     tripId: str | None = None
+
+
+class TestSmsIn(BaseModel):
+    to_phone: str
+    message: str | None = None
+

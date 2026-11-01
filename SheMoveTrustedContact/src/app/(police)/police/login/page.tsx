@@ -55,14 +55,19 @@ export default function PoliceLoginPage() {
       <div className="w-full max-w-md relative z-10">
         {/* Header Branding */}
         <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-red-600 via-amber-600 to-blue-700 shadow-xl border border-white/20 mb-3">
-            <ShieldAlert className="w-9 h-9 text-white" />
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-slate-900 shadow-2xl border border-violet-500/30 mb-3 p-1 overflow-hidden">
+            <img
+              src="/app_icon_dark.png"
+              alt="SheMove"
+              className="w-full h-full object-cover rounded-xl"
+            />
           </div>
-          <h1 className="text-2xl font-black text-white tracking-wide">
-            SafeJourney CAD
+          <h1 className="text-2xl font-black text-white tracking-wide flex items-center justify-center gap-2">
+            <span>SheMove CAD</span>
+            <span className="text-[10px] bg-red-600 text-white font-mono px-2 py-0.5 rounded tracking-widest uppercase">112</span>
           </h1>
           <p className="text-xs text-slate-400 mt-1 uppercase tracking-wider font-semibold">
-            Metropolis Police Emergency Command & Dispatch
+            Police Emergency Command & Dispatch
           </p>
         </div>
 

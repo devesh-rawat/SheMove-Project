@@ -2,16 +2,20 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 
 import '../models/models.dart';
+import '../services/api_service.dart';
 import '../services/routing_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/numeric_pin_pad.dart';
 import '../widgets/swipe_action_control.dart';
 
 enum ActiveMapLayer { streets, satellite }
+
+enum MovementMode { realGps, simulation }
 
 class ActiveJourneyScreen extends StatefulWidget {
   final Journey journey;
@@ -28,6 +32,14 @@ class ActiveJourneyScreen extends StatefulWidget {
   final VoidCallback onBack;
   final String configuredSafetyPin;
   final String configuredDuressPin;
+  final VoidCallback? onOpenScenarios;
+  final Function(
+    double lat,
+    double lng,
+    double speedKmh,
+    double heading, {
+    double? progressPercent,
+  })? onSimulatedLocationUpdate;
 
   const ActiveJourneyScreen({
     super.key,
@@ -45,6 +57,8 @@ class ActiveJourneyScreen extends StatefulWidget {
     required this.onBack,
     this.configuredSafetyPin = '1234',
     this.configuredDuressPin = '9999',
+    this.onOpenScenarios,
+    this.onSimulatedLocationUpdate,
   });
 
   @override
@@ -85,6 +99,14 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
   LatLng? _prevGpsPosition;
   DateTime _prevGpsTime = DateTime.now();
   int _swipeKeyCounter = 0;
+
+  // Movement Mode & Distance/Speed Simulation Controls
+  MovementMode _movementMode = MovementMode.realGps;
+  bool _isSimPlaying = true;
+  final double _simBaseSpeedKmh = 36.0; // 36 km/h = 10 m/s
+  double _simMultiplier = 1.0; // 1x, 2x, 5x
+  double _simTraveledDistanceMeters = 0.0;
+  bool _hasReachedDestination = false;
 
   @override
   void initState() {
@@ -212,16 +234,200 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
     return double.parse(total.toStringAsFixed(1));
   }
 
+  /// Calculates interpolated vehicle position and bearing along the route polyline
+  /// at a given distance in meters from start towards destination.
+  ({LatLng point, double heading, double remainingMeters, double progress})
+  _calculatePositionAlongRoute(double targetDistMeters) {
+    if (_routePoints.isEmpty) {
+      return (
+        point: _vehiclePosition,
+        heading: _vehicleHeading,
+        remainingMeters: 0.0,
+        progress: 1.0,
+      );
+    }
+    if (_routePoints.length == 1) {
+      return (
+        point: _routePoints.first,
+        heading: _vehicleHeading,
+        remainingMeters: 0.0,
+        progress: 1.0,
+      );
+    }
+
+    const distCalc = Distance();
+    double totalMeters = _totalRouteDistanceKm * 1000.0;
+    if (totalMeters <= 0.0) {
+      totalMeters = _calculatePolylineDistance(_routePoints) * 1000.0;
+    }
+
+    if (targetDistMeters >= totalMeters) {
+      return (
+        point: _routePoints.last,
+        heading: _calculateBearing(
+          _routePoints[_routePoints.length - 2],
+          _routePoints.last,
+        ),
+        remainingMeters: 0.0,
+        progress: 1.0,
+      );
+    }
+
+    double accumulated = 0.0;
+    for (int i = 0; i < _routePoints.length - 1; i++) {
+      final p1 = _routePoints[i];
+      final p2 = _routePoints[i + 1];
+      final segMeters = distCalc.as(LengthUnit.Meter, p1, p2);
+
+      if (accumulated + segMeters >= targetDistMeters) {
+        final remainingInSeg = targetDistMeters - accumulated;
+        final t =
+            segMeters > 0 ? (remainingInSeg / segMeters).clamp(0.0, 1.0) : 0.0;
+        final lat = p1.latitude + t * (p2.latitude - p1.latitude);
+        final lng = p1.longitude + t * (p2.longitude - p1.longitude);
+        final heading = _calculateBearing(p1, p2);
+        final remaining = math.max(0.0, totalMeters - targetDistMeters);
+        final prog =
+            totalMeters > 0
+                ? (targetDistMeters / totalMeters).clamp(0.0, 1.0)
+                : 0.0;
+
+        return (
+          point: LatLng(lat, lng),
+          heading: heading,
+          remainingMeters: remaining,
+          progress: prog,
+        );
+      }
+      accumulated += segMeters;
+    }
+
+    return (
+      point: _routePoints.last,
+      heading: _vehicleHeading,
+      remainingMeters: 0.0,
+      progress: 1.0,
+    );
+  }
+
+  void _resetSimulation() {
+    setState(() {
+      _simTraveledDistanceMeters = 0.0;
+      _hasReachedDestination = false;
+      _isSimPlaying = true;
+      if (_routePoints.isNotEmpty) {
+        _vehiclePosition = _routePoints.first;
+        _traversedBreadcrumbs.clear();
+        _traversedBreadcrumbs.add(_vehiclePosition);
+      }
+      _initRemainingTime();
+    });
+    if (_routePoints.isNotEmpty) {
+      widget.onSimulatedLocationUpdate?.call(
+        _routePoints.first.latitude,
+        _routePoints.first.longitude,
+        0.0,
+        _vehicleHeading,
+        progressPercent: 0.0,
+      );
+    }
+  }
+
   void _startTicker() {
     _journeyTicker?.cancel();
     _journeyTicker = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
-      setState(() {
-        // Decrement reverse countdown timer
+
+      if (_movementMode == MovementMode.simulation) {
+        if (_isSimPlaying &&
+            !_hasReachedDestination &&
+            _routePoints.length >= 2) {
+          final effectiveSpeedKmh = _simBaseSpeedKmh * _simMultiplier;
+          final stepMeters =
+              (effectiveSpeedKmh * 1000.0) / 3600.0; // distance moved per second
+          _simTraveledDistanceMeters += stepMeters;
+
+          final totalMeters = _totalRouteDistanceKm * 1000.0;
+          if (_simTraveledDistanceMeters >= totalMeters) {
+            _simTraveledDistanceMeters = totalMeters;
+            _hasReachedDestination = true;
+            _isSimPlaying = false;
+            _liveSpeedKmh = 0.0;
+            _vehiclePosition = _routePoints.last;
+            _remainingJourneySeconds = 0;
+            if (_traversedBreadcrumbs.isEmpty ||
+                _traversedBreadcrumbs.last != _routePoints.last) {
+              _traversedBreadcrumbs.add(_routePoints.last);
+            }
+            widget.onSimulatedLocationUpdate?.call(
+              _routePoints.last.latitude,
+              _routePoints.last.longitude,
+              0.0,
+              _vehicleHeading,
+              progressPercent: 1.0,
+            );
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  '🎉 Destination reached! Swipe right below to confirm safe arrival.',
+                ),
+                duration: Duration(seconds: 4),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          } else {
+            final result = _calculatePositionAlongRoute(
+              _simTraveledDistanceMeters,
+            );
+            _vehiclePosition = result.point;
+            _vehicleHeading = result.heading;
+            _liveSpeedKmh = effectiveSpeedKmh;
+
+            // Compute remaining journey seconds based on remaining distance and step
+            final remainingSecs =
+                (result.remainingMeters / math.max(1.0, stepMeters)).round();
+            _remainingJourneySeconds = remainingSecs;
+
+            // Record breadcrumbs
+            if (_traversedBreadcrumbs.isEmpty) {
+              _traversedBreadcrumbs.add(result.point);
+            } else {
+              const distCalc = Distance();
+              if (distCalc.as(
+                    LengthUnit.Meter,
+                    _traversedBreadcrumbs.last,
+                    result.point,
+                  ) >=
+                  3.0) {
+                _traversedBreadcrumbs.add(result.point);
+              }
+            }
+
+            // Stream simulated location heartbeat to backend
+            widget.onSimulatedLocationUpdate?.call(
+              result.point.latitude,
+              result.point.longitude,
+              effectiveSpeedKmh,
+              result.heading,
+              progressPercent: result.progress,
+            );
+          }
+
+          if (_autoFollow) {
+            try {
+              final zoom = _mapController.camera.zoom;
+              _mapController.move(_vehiclePosition, zoom);
+            } catch (_) {}
+          }
+        }
+      } else {
+        // Real GPS Mode: countdown timer decrements by 1s
         if (_remainingJourneySeconds > 0) {
           _remainingJourneySeconds--;
         }
-      });
+      }
+
+      setState(() {});
     });
   }
 
@@ -427,8 +633,9 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
       });
     }
 
-    // React to real GPS location updates: snap vehicle marker and update route direction
-    if (widget.currentLocation != null) {
+    // React to real GPS location updates: snap vehicle marker and update route direction (only in Real GPS mode)
+    if (_movementMode == MovementMode.realGps &&
+        widget.currentLocation != null) {
       final newGps = LatLng(
         widget.currentLocation!.latitude,
         widget.currentLocation!.longitude,
@@ -440,13 +647,17 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
       }
     }
 
-    if (widget.currentSpeedKmh > 0 && widget.currentSpeedKmh != _liveSpeedKmh) {
+    if (_movementMode == MovementMode.realGps &&
+        widget.currentSpeedKmh > 0 &&
+        widget.currentSpeedKmh != _liveSpeedKmh) {
       setState(() {
         _liveSpeedKmh = widget.currentSpeedKmh;
       });
     }
 
-    if (widget.currentHeading > 0 && widget.currentHeading != _vehicleHeading) {
+    if (_movementMode == MovementMode.realGps &&
+        widget.currentHeading > 0 &&
+        widget.currentHeading != _vehicleHeading) {
       setState(() {
         _vehicleHeading = widget.currentHeading;
       });
@@ -681,6 +892,115 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
         _holdProgress = 0.0;
       });
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Live Tracking Link Share Sheet
+  // ---------------------------------------------------------------------------
+  void _showShareTrackingSheet(bool isDark) {
+    final token = widget.journey.shareToken ?? widget.journey.id;
+    final trackUrl = ApiService().getPublicTrackingUrl(token);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryViolet.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.share_location_rounded, color: AppColors.primaryViolet, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Live Tracking Link',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          'Share real-time protected journey with family',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: isDark ? AppColors.midnightDarkBackground : Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppColors.primaryViolet.withValues(alpha: 0.2)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.link, color: AppColors.primaryViolet, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        trackUrl,
+                        style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: trackUrl));
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: const Row(
+                          children: [
+                            Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
+                            SizedBox(width: 8),
+                            Text('Tracking link copied to clipboard!'),
+                          ],
+                        ),
+                        backgroundColor: AppColors.safeGreen,
+                        behavior: SnackBarBehavior.floating,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.copy_rounded, color: Colors.white),
+                  label: const Text('Copy Live Tracking Link', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryViolet,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -924,7 +1244,19 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
             ),
           ],
         ),
-        actions: const [],
+        actions: [
+          if (widget.onOpenScenarios != null)
+            IconButton(
+              tooltip: 'Demo Scenarios',
+              icon: const Icon(Icons.science_outlined),
+              onPressed: widget.onOpenScenarios,
+            ),
+          IconButton(
+            tooltip: 'Share Live Tracking Link',
+            icon: const Icon(Icons.share_outlined),
+            onPressed: () => _showShareTrackingSheet(isDark),
+          ),
+        ],
         centerTitle: true,
       ),
       body: SafeArea(
@@ -974,8 +1306,13 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
     final progressFraction = (_remainingJourneySeconds / totalDurationSecs)
         .clamp(0.0, 1.0);
     final distanceLeftKm = math.max(
-      0.1,
-      _totalRouteDistanceKm * (1.0 - widget.journey.progressPercent),
+      0.0,
+      _movementMode == MovementMode.simulation
+          ? math.max(
+            0.0,
+            _totalRouteDistanceKm - (_simTraveledDistanceMeters / 1000.0),
+          )
+          : _totalRouteDistanceKm * (1.0 - widget.journey.progressPercent),
     );
 
     return Container(
@@ -1337,12 +1674,27 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
   }
 
   // ---------------------------------------------------------------------------
-  // 2. Real Live Map Moving on Selected Route
+  // 2. Real Live Map Moving on Selected Route (Real GPS or Sim Movement Mode)
   // ---------------------------------------------------------------------------
   Widget _buildLiveMapCard(bool isDark) {
+    final coveredKm =
+        _movementMode == MovementMode.simulation
+            ? (_simTraveledDistanceMeters / 1000.0)
+            : (_totalRouteDistanceKm * widget.journey.progressPercent);
+    final remainingKm =
+        _movementMode == MovementMode.simulation
+            ? math.max(
+              0.0,
+              _totalRouteDistanceKm - (_simTraveledDistanceMeters / 1000.0),
+            )
+            : math.max(
+              0.0,
+              _totalRouteDistanceKm * (1.0 - widget.journey.progressPercent),
+            );
+
     return Container(
       width: double.infinity,
-      height: 270,
+      height: 350,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF0C1024) : const Color(0xFFF1F5F9),
@@ -1580,19 +1932,21 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
 
           // Overlay 1: Live Speedometer HUD (Top Left)
           Positioned(
-            top: 12,
-            left: 12,
+            top: 10,
+            left: 10,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
               decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xEE0B0F22)
-                    : const Color(0xEEFFFFFF),
-                borderRadius: BorderRadius.circular(14),
+                color:
+                    isDark
+                        ? const Color(0xEE0B0F22)
+                        : const Color(0xEEFFFFFF),
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: isDark
-                      ? const Color(0x338B5CF6)
-                      : const Color(0x22000000),
+                  color:
+                      isDark
+                          ? const Color(0x338B5CF6)
+                          : const Color(0x22000000),
                 ),
                 boxShadow: [
                   BoxShadow(
@@ -1606,28 +1960,20 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
                 children: [
                   const Icon(
                     Icons.speed_rounded,
-                    size: 16,
+                    size: 15,
                     color: AppColors.primaryViolet,
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 5),
                   Text(
                     '${_liveSpeedKmh.toStringAsFixed(0)} KM/H',
                     style: TextStyle(
-                      fontSize: 13,
+                      fontSize: 12,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 0.4,
-                      color: isDark
-                          ? AppColors.textPrimary
-                          : AppColors.lightTextPrimary,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: const BoxDecoration(
-                      color: AppColors.safeGreen,
-                      shape: BoxShape.circle,
+                      color:
+                          isDark
+                              ? AppColors.textPrimary
+                              : AppColors.lightTextPrimary,
                     ),
                   ),
                 ],
@@ -1637,8 +1983,8 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
 
           // Overlay 2: Map Controls (Top Right: Layer switch & Auto-follow)
           Positioned(
-            top: 12,
-            right: 12,
+            top: 10,
+            right: 10,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -1656,68 +2002,75 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
                       });
                     }
                   },
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
                   child: Container(
-                    padding: const EdgeInsets.all(7),
+                    padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: _autoFollow
-                          ? AppColors.primaryViolet
-                          : (isDark
-                                ? const Color(0xEE0B0F22)
-                                : const Color(0xEEFFFFFF)),
+                      color:
+                          _autoFollow
+                              ? AppColors.primaryViolet
+                              : (isDark
+                                  ? const Color(0xEE0B0F22)
+                                  : const Color(0xEEFFFFFF)),
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: _autoFollow
-                            ? AppColors.primaryViolet
-                            : (isDark
-                                  ? const Color(0x338B5CF6)
-                                  : const Color(0x22000000)),
+                        color:
+                            _autoFollow
+                                ? AppColors.primaryViolet
+                                : (isDark
+                                    ? const Color(0x338B5CF6)
+                                    : const Color(0x22000000)),
                       ),
                     ),
                     child: Icon(
                       Icons.my_location_rounded,
-                      size: 16,
-                      color: _autoFollow
-                          ? Colors.white
-                          : (isDark
-                                ? AppColors.textPrimary
-                                : AppColors.lightTextPrimary),
+                      size: 15,
+                      color:
+                          _autoFollow
+                              ? Colors.white
+                              : (isDark
+                                  ? AppColors.textPrimary
+                                  : AppColors.lightTextPrimary),
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
 
                 // Map layer switcher (Streets / Satellite)
                 InkWell(
                   onTap: () {
                     setState(() {
-                      _mapLayer = _mapLayer == ActiveMapLayer.streets
-                          ? ActiveMapLayer.satellite
-                          : ActiveMapLayer.streets;
+                      _mapLayer =
+                          _mapLayer == ActiveMapLayer.streets
+                              ? ActiveMapLayer.satellite
+                              : ActiveMapLayer.streets;
                     });
                   },
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(10),
                   child: Container(
-                    padding: const EdgeInsets.all(7),
+                    padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color(0xEE0B0F22)
-                          : const Color(0xEEFFFFFF),
+                      color:
+                          isDark
+                              ? const Color(0xEE0B0F22)
+                              : const Color(0xEEFFFFFF),
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: isDark
-                            ? const Color(0x338B5CF6)
-                            : const Color(0x22000000),
+                        color:
+                            isDark
+                                ? const Color(0x338B5CF6)
+                                : const Color(0x22000000),
                       ),
                     ),
                     child: Icon(
                       _mapLayer == ActiveMapLayer.satellite
                           ? Icons.layers_clear_rounded
                           : Icons.layers_rounded,
-                      size: 16,
-                      color: isDark
-                          ? AppColors.textPrimary
-                          : AppColors.lightTextPrimary,
+                      size: 15,
+                      color:
+                          isDark
+                              ? AppColors.textPrimary
+                              : AppColors.lightTextPrimary,
                     ),
                   ),
                 ),
@@ -1725,18 +2078,384 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
             ),
           ),
 
-          // Overlay 3: Live Real-Time Route Progress HUD (Bottom)
+          // Overlay 3: MOVEMENT MODE TOGGLE (Top Center Pill)
           Positioned(
-            bottom: 12,
-            left: 12,
-            right: 12,
+            top: 10,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.all(3),
+                decoration: BoxDecoration(
+                  color:
+                      isDark
+                          ? const Color(0xEE0B0F22)
+                          : const Color(0xEEFFFFFF),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color:
+                        isDark
+                            ? const Color(0x448B5CF6)
+                            : const Color(0x25000000),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.16),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Option A: Real GPS Mode
+                    InkWell(
+                      onTap: () {
+                        setState(() {
+                          _movementMode = MovementMode.realGps;
+                          if (widget.currentLocation != null) {
+                            _vehiclePosition = LatLng(
+                              widget.currentLocation!.latitude,
+                              widget.currentLocation!.longitude,
+                            );
+                            _vehicleHeading = widget.currentHeading;
+                            _liveSpeedKmh = widget.currentSpeedKmh;
+                          }
+                        });
+                      },
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color:
+                              _movementMode == MovementMode.realGps
+                                  ? AppColors.safeGreen
+                                  : Colors.transparent,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.sensors_rounded,
+                              size: 13,
+                              color:
+                                  _movementMode == MovementMode.realGps
+                                      ? Colors.white
+                                      : (isDark
+                                          ? AppColors.textSecondary
+                                          : AppColors.lightTextSecondary),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Real GPS',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color:
+                                    _movementMode == MovementMode.realGps
+                                        ? Colors.white
+                                        : (isDark
+                                            ? AppColors.textPrimary
+                                            : AppColors.lightTextPrimary),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    // Option B: Sim Movement Mode
+                    InkWell(
+                      onTap: () {
+                        setState(() {
+                          _movementMode = MovementMode.simulation;
+                          _isSimPlaying = true;
+                        });
+                      },
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color:
+                              _movementMode == MovementMode.simulation
+                                  ? AppColors.primaryViolet
+                                  : Colors.transparent,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.directions_car_rounded,
+                              size: 13,
+                              color:
+                                  _movementMode == MovementMode.simulation
+                                      ? Colors.white
+                                      : (isDark
+                                          ? AppColors.textSecondary
+                                          : AppColors.lightTextSecondary),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Sim Mode',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color:
+                                    _movementMode == MovementMode.simulation
+                                        ? Colors.white
+                                        : (isDark
+                                            ? AppColors.textPrimary
+                                            : AppColors.lightTextPrimary),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // Overlay 4: CONTROLS SUB-BAR (Under the Mode Selector)
+          if (_movementMode == MovementMode.simulation)
+            Positioned(
+              top: 50,
+              left: 10,
+              right: 10,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color:
+                      isDark
+                          ? const Color(0xEE0B0F22)
+                          : const Color(0xEEFFFFFF),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: AppColors.primaryViolet.withValues(alpha: 0.35),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.16),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    // Play / Pause Button
+                    InkWell(
+                      onTap: () {
+                        setState(() {
+                          if (_hasReachedDestination) {
+                            _resetSimulation();
+                          } else {
+                            _isSimPlaying = !_isSimPlaying;
+                          }
+                        });
+                      },
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: BoxDecoration(
+                          color:
+                              (_isSimPlaying && !_hasReachedDestination)
+                                  ? AppColors.primaryViolet
+                                  : AppColors.safeGreen,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          _hasReachedDestination
+                              ? Icons.replay_rounded
+                              : (_isSimPlaying
+                                  ? Icons.pause_rounded
+                                  : Icons.play_arrow_rounded),
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+
+                    // Multiplier Chips
+                    ...[1.0, 2.0, 5.0].map((m) {
+                      final isSelected = _simMultiplier == m;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 5),
+                        child: InkWell(
+                          onTap: () {
+                            setState(() => _simMultiplier = m);
+                          },
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color:
+                                  isSelected
+                                      ? AppColors.primaryViolet.withValues(
+                                        alpha: 0.2,
+                                      )
+                                      : Colors.transparent,
+                              border: Border.all(
+                                color:
+                                    isSelected
+                                        ? AppColors.primaryViolet
+                                        : (isDark
+                                            ? Colors.white24
+                                            : Colors.black12),
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              '${m.toInt()}x',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight:
+                                    isSelected
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                color:
+                                    isSelected
+                                        ? AppColors.primaryViolet
+                                        : (isDark
+                                            ? AppColors.textPrimary
+                                            : AppColors.lightTextPrimary),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+
+                    const Spacer(),
+
+                    // Speed & step readout
+                    Text(
+                      '${(_simBaseSpeedKmh * _simMultiplier).toStringAsFixed(0)} km/h (${((_simBaseSpeedKmh * _simMultiplier * 1000.0) / 3600.0).toStringAsFixed(1)} m/s)',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color:
+                            isDark
+                                ? AppColors.textSecondary
+                                : AppColors.lightTextSecondary,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+
+                    // Reset button
+                    InkWell(
+                      onTap: _resetSimulation,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: (isDark ? Colors.white : Colors.black)
+                              .withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Icon(
+                          Icons.replay_rounded,
+                          size: 15,
+                          color:
+                              isDark
+                                  ? AppColors.textPrimary
+                                  : AppColors.lightTextPrimary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            Positioned(
+              top: 50,
+              left: 10,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color:
+                      isDark
+                          ? const Color(0xEE0B0F22)
+                          : const Color(0xEEFFFFFF),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppColors.safeGreen.withValues(alpha: 0.35),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.12),
+                      blurRadius: 6,
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: const BoxDecoration(
+                        color: AppColors.safeGreen,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Live GPS: Real-time sensor stream',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color:
+                            isDark
+                                ? AppColors.textPrimary
+                                : AppColors.lightTextPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // Overlay 5: Live Real-Time Route Progress HUD (Bottom)
+          Positioned(
+            bottom: 10,
+            left: 10,
+            right: 10,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xEE0B0F22) : const Color(0xEEFFFFFF),
+                color:
+                    isDark
+                        ? const Color(0xEE0B0F22)
+                        : const Color(0xEEFFFFFF),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: isDark ? const Color(0x338B5CF6) : const Color(0x22000000),
+                  color:
+                      isDark
+                          ? const Color(0x338B5CF6)
+                          : const Color(0x22000000),
                 ),
                 boxShadow: [
                   BoxShadow(
@@ -1761,11 +2480,14 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        'Live Covered: ${(_totalRouteDistanceKm * widget.journey.progressPercent).toStringAsFixed(1)} km',
+                        'Live Covered: ${coveredKm.toStringAsFixed(1)} km',
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
-                          color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
+                          color:
+                              isDark
+                                  ? AppColors.textPrimary
+                                  : AppColors.lightTextPrimary,
                         ),
                       ),
                     ],
@@ -1773,7 +2495,9 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
                   Container(
                     height: 12,
                     width: 1,
-                    color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.2),
+                    color: (isDark ? Colors.white : Colors.black).withValues(
+                      alpha: 0.2,
+                    ),
                   ),
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1788,11 +2512,14 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen>
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        'Ahead: ${math.max(0.1, _totalRouteDistanceKm * (1.0 - widget.journey.progressPercent)).toStringAsFixed(1)} km',
+                        'Ahead: ${remainingKm.toStringAsFixed(1)} km',
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
-                          color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
+                          color:
+                              isDark
+                                  ? AppColors.textPrimary
+                                  : AppColors.lightTextPrimary,
                         ),
                       ),
                     ],

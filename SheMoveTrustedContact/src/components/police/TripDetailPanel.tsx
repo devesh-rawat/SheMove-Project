@@ -120,12 +120,22 @@ export const TripDetailPanel: React.FC<TripDetailPanelProps> = ({
             'animate-pulse bg-emerald-500'
           }`} />
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="font-bold text-sm text-white">{trip.traveller_name}</span>
               <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md"
                 style={{ background: statusColor.bg, color: statusColor.text, border: `1px solid ${statusColor.border}` }}>
                 {trip.status.replace(/_/g, ' ')}
               </span>
+              {trip.is_simulation === false || trip.source === 'mobile_app' ? (
+                <span className="flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  LIVE APP USER
+                </span>
+              ) : (
+                <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+                  DEMO SCENARIO
+                </span>
+              )}
             </div>
             <div className="text-[10px] font-mono mt-0.5" style={{ color: '#475569' }}>
               {trip.current_station_name}

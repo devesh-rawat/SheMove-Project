@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { forwardToBackend } from '@/lib/backend';
 import { DEMO_OFFICERS } from '@/lib/store';
 
 export async function POST(req: NextRequest) {
+  const backendRes = await forwardToBackend(req, '/api/v1/auth/police/login');
+  if (backendRes) return backendRes;
+
   try {
     const body = await req.json();
+
     const { email, password, officerId } = body;
 
     // Direct officer pick or standard demo credentials

@@ -280,7 +280,7 @@ Respond ONLY with a JSON object matching this schema without markdown code block
           rationale: 'Intercity corridor transit calibrated to balanced 10-minute intervals.',
           crowdContext: 'Intercity Highway',
           safetyTips: [
-            'Maintain corridor tracking enabled for highway transit.',
+            'Live GPS tracking verifies route progress for highway transit.',
             'Regular interval pings assure your trusted circle.'
           ],
           isAiGenerated: false,
@@ -297,7 +297,7 @@ Respond ONLY with a JSON object matching this schema without markdown code block
         crowdContext: 'Night Vehicle Ride',
         safetyTips: [
           'Ensure vehicle registration matches your designated driver.',
-          'Corridor geofence will detect unexpected detours.'
+          'Live GPS tracking will detect unexpected stops or delays.'
         ],
         isAiGenerated: false,
       );
@@ -312,7 +312,7 @@ Respond ONLY with a JSON object matching this schema without markdown code block
           rationale: 'Extended evening routes utilize 5-minute intervals as lighting decreases.',
           crowdContext: 'Suburban Transit',
           safetyTips: [
-            'Vehicle route is continuously tracked against corridor limits.',
+            'Vehicle route is continuously tracked with live telemetry.',
             'One-tap check-in resets the protection interval.'
           ],
           isAiGenerated: false,

@@ -1,5 +1,6 @@
 from typing import Any
 
+import certifi
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from app.config import get_settings
@@ -13,11 +14,23 @@ async def connect_mongo() -> AsyncIOMotorDatabase | None:
     global _client, _db
     settings = get_settings()
     try:
-        _client = AsyncIOMotorClient(settings.mongodb_uri, serverSelectionTimeoutMS=1500)
+        masked_uri = settings.mongodb_uri
+        if "@" in masked_uri:
+            proto, rest = masked_uri.split("://", 1)
+            _, host = rest.split("@", 1)
+            masked_uri = f"{proto}://***:***@{host}"
+        print(f"Connecting to MongoDB Atlas at {masked_uri}...")
+        _client = AsyncIOMotorClient(
+            settings.mongodb_uri,
+            tlsCAFile=certifi.where(),
+            serverSelectionTimeoutMS=8000,
+        )
         await _client.server_info()
         _db = _client[settings.mongodb_db]
+        print(f"Connected successfully to MongoDB Atlas database: {settings.mongodb_db}")
         return _db
-    except Exception:
+    except Exception as exc:
+        print(f"Could not connect to MongoDB Atlas ({exc}). Falling back to in-memory store.")
         _client = None
         _db = None
         return None
@@ -63,6 +76,7 @@ async def load_from_mongo() -> bool:
         store.officers = [_strip_id(item) for item in officers]
     store.audit = [_strip_id(item) for item in await db.audit.find().sort("at", -1).to_list(200)]
     store.notifications = [_strip_id(item) for item in await db.notifications.find().sort("created_at", -1).to_list(200)]
+    print(f"Loaded {len(store.trips)} trips and {len(store.users)} users from MongoDB Atlas.")
     return True
 
 
@@ -87,3 +101,4 @@ async def persist_snapshot() -> None:
     await replace_all("officers", store.officers)
     await replace_all("audit", store.audit[:200])
     await replace_all("notifications", store.notifications[:200])
+    print(f"Persisted state snapshot to MongoDB Atlas ({len(store.trips)} trips, {len(store.users)} users).")

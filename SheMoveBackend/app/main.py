@@ -58,6 +58,12 @@ def root():
     return RedirectResponse(url="/docs")
 
 
+@api.get("/t/{token}", include_in_schema=False)
+def redirect_t(token: str):
+    return RedirectResponse(url=f"http://localhost:3000/t/{token}")
+
+
+
 @api.get("/health")
 def health():
     from app.mongo import mongo_db

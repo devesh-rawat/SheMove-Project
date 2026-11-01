@@ -9,10 +9,16 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 @router.post("/traveller/register")
 def register(body: TravellerRegister):
-    try:
+    user = store.find_user_by_phone(body.phone)
+    if user:
+        user = store.update_user(user["id"], {
+            "name": body.name,
+            "safety_pin": body.safety_pin,
+            "duress_pin": body.duress_pin,
+            "password": body.password,
+        })
+    else:
         user = store.register_user(body.model_dump())
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     token = create_token({"sub": user["id"], "role": "TRAVELLER", "name": user["name"]})
     return {"success": True, "token": token, "user": public_user(user), "expires_in": 86400}
 

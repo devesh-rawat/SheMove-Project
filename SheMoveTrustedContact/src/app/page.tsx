@@ -5,12 +5,21 @@ export default function HomePage() {
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-16 text-white">
       <div className="mx-auto max-w-5xl">
-        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-cyan-300">
-          SafeJourney
-        </p>
-        <h1 className="mt-3 text-4xl font-bold">Choose your dashboard</h1>
-        <p className="mt-3 max-w-2xl text-slate-400">
-          Police operations and trusted-contact journey tracking are available as separate workspaces.
+        <div className="flex items-center gap-4">
+          <img
+            src="/app_icon_dark.png"
+            alt="SheMove"
+            className="w-14 h-14 rounded-2xl object-cover shadow-2xl border border-violet-500/30"
+          />
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-400">
+              SheMove Platform
+            </p>
+            <h1 className="mt-1 text-3xl font-extrabold tracking-tight">Choose your dashboard</h1>
+          </div>
+        </div>
+        <p className="mt-4 max-w-2xl text-slate-400">
+          Police operations center and trusted contact live tracking are available as dedicated real-time workspaces.
         </p>
 
         <div className="mt-10 grid gap-5 md:grid-cols-2">

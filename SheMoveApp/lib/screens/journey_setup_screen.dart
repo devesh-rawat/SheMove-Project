@@ -11,8 +11,8 @@ import '../theme/app_colors.dart';
 import '../widgets/swipe_action_control.dart';
 
 enum MapLayerStyle {
-  satellite,
   streets,
+  satellite,
 }
 
 enum MapPinMode {
@@ -75,6 +75,19 @@ class DynamicCheckInRecommendation {
   });
 }
 
+/// Model for recent / saved journey destinations
+class RecentDestinationItem {
+  final String title;
+  final String subtitle;
+  final LatLng point;
+
+  const RecentDestinationItem({
+    required this.title,
+    required this.subtitle,
+    required this.point,
+  });
+}
+
 class JourneySetupScreen extends StatefulWidget {
   final List<TrustedContact> contacts;
   final String initialStartLocation;
@@ -87,8 +100,7 @@ class JourneySetupScreen extends StatefulWidget {
     TransportMode mode,
     String vehicleNo,
     int durationMinutes,
-    int intervalMinutes,
-    bool geofence, [
+    int intervalMinutes, [
     List<String>? selectedContactIds,
     List<LatLngPoint>? waypoints,
   ]) onStartJourney;
@@ -96,7 +108,7 @@ class JourneySetupScreen extends StatefulWidget {
   const JourneySetupScreen({
     super.key,
     required this.contacts,
-    this.initialStartLocation = 'Connaught Place, Inner Circle',
+    this.initialStartLocation = 'Saheed sukhdev college, GIRLS HOSTEL, Shaheed Sukhdev College of Business Studies',
     this.initialStartPoint,
     required this.onBack,
     this.onOpenContacts,
@@ -126,47 +138,57 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
   bool _hasSelectedDestination = false;
   RoadRouteResult? _roadRoute;
   MetroRouteResult? _metroRoute;
-  bool _isCalculatingRoute = false;
 
   TransportMode _selectedMode = TransportMode.cab;
   int _durationMinutes = 25;
   int _checkInInterval = 10;
-  bool _geofenceEnabled = true;
-  int _geofenceRadiusMeters = 300; // 150m (Strict), 300m (Standard), 500m (Flexible)
-
-  /// Checks whether a transport mode is logically viable for the given route distance
-  bool _isModeViable(TransportMode mode, double distanceKm) {
-    switch (mode) {
-      case TransportMode.walking:
-        return distanceKm <= 12.0; // Logical limit: nobody travels long distance by walking
-      case TransportMode.auto:
-        return distanceKm <= 45.0; // Auto-rickshaws restricted to municipal/NCR radius
-      case TransportMode.metro:
-        return distanceKm <= 60.0 && (_metroRoute == null || _metroRoute!.isAvailable);
-      case TransportMode.cab:
-      case TransportMode.bus:
-      case TransportMode.other:
-        return true;
-    }
-  }
-
-  List<TransportMode> _getViableModes(double distanceKm) {
-    return TransportMode.values.where((m) => _isModeViable(m, distanceKm)).toList();
-  }
 
   // Map state
-  MapLayerStyle _mapLayerStyle = MapLayerStyle.satellite;
-  MapPinMode _pinMode = MapPinMode.destination;
+  MapLayerStyle _mapLayerStyle = MapLayerStyle.streets;
+  final MapPinMode _pinMode = MapPinMode.destination;
   bool _isLocatingUser = false;
-  bool _isReverseGeocoding = false;
   List<SearchLocationPreset> _dynamicSuggestions = [];
   GeminiCheckInPrediction? _geminiPrediction;
   Timer? _searchDebounceTimer;
 
+  // UI State
+  bool _isSearching = false;
+  final Set<String> _favoritedTitles = {};
+  double _sheetExtent = 0.68;
+  bool _isSheetUp = true;
+
+  // Exact 3 Recent Destinations for quick access
+  static const List<RecentDestinationItem> _recentDestinations = [
+    RecentDestinationItem(
+      title: 'Pacific Mall NSP Pitampura',
+      subtitle: 'Pitampura, New Delhi, Delhi, India',
+      point: LatLng(28.6989, 77.1517),
+    ),
+    RecentDestinationItem(
+      title: 'Vivekananda Institute of Professional Studies...',
+      subtitle: 'Outer Ring Road, AU Block, Ranikhet, Pitampura, New ...',
+      point: LatLng(28.7032, 77.1432),
+    ),
+    RecentDestinationItem(
+      title: 'Metro Station-Rohini Sector 18',
+      subtitle: 'Block E, Sector 18, Rohini, Delhi, India',
+      point: LatLng(28.7360, 77.1350),
+    ),
+  ];
+
   @override
   void initState() {
     super.initState();
-    _startController = TextEditingController(text: widget.initialStartLocation);
+    const defaultSSCBS = 'Saheed sukhdev college, GIRLS HOSTEL, Shaheed Sukhdev College of Business Studies';
+    final initialStart = widget.initialStartLocation.isNotEmpty &&
+            widget.initialStartLocation != 'Connaught Place, Inner Circle' &&
+            widget.initialStartLocation != 'MG Road, Sector 28, Gurugram'
+        ? widget.initialStartLocation
+        : (widget.initialStartPoint != null && widget.initialStartPoint!.address.isNotEmpty
+            ? widget.initialStartPoint!.address
+            : defaultSSCBS);
+
+    _startController = TextEditingController(text: initialStart);
     _destController = TextEditingController(text: '');
     _vehicleController = TextEditingController(text: 'DL 1Y B 4821');
     _selectedContactIds = widget.contacts.map((c) => c.id).toSet();
@@ -177,10 +199,11 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
         widget.initialStartPoint!.longitude,
       );
     } else {
-      _startCoord = const LatLng(28.6315, 77.2167); // Connaught Place default
+      // Shaheed Sukhdev College of Business Studies, Sector 16 Rohini
+      _startCoord = const LatLng(28.7317, 77.1086);
     }
 
-    _destCoord = const LatLng(28.5535, 77.1944);
+    _destCoord = const LatLng(28.6989, 77.1517); // Pacific Mall NSP default
     _hasSelectedDestination = false;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -232,6 +255,26 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
     super.dispose();
   }
 
+  /// Checks whether a transport mode is logically viable for the given route distance
+  bool _isModeViable(TransportMode mode, double distanceKm) {
+    switch (mode) {
+      case TransportMode.walking:
+        return distanceKm <= 12.0;
+      case TransportMode.auto:
+        return distanceKm <= 45.0;
+      case TransportMode.metro:
+        return distanceKm <= 60.0 && (_metroRoute == null || _metroRoute!.isAvailable);
+      case TransportMode.cab:
+      case TransportMode.bus:
+      case TransportMode.other:
+        return true;
+    }
+  }
+
+  List<TransportMode> _getViableModes(double distanceKm) {
+    return TransportMode.values.where((m) => _isModeViable(m, distanceKm)).toList();
+  }
+
   /// Generates the effective list of waypoints matching exactly what is rendered on the map.
   List<LatLngPoint> _getEffectiveRouteWaypoints() {
     final List<LatLng> points = [];
@@ -263,8 +306,6 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
   Future<void> _calculateActiveRoute() async {
     if (!_hasSelectedDestination) return;
 
-    setState(() => _isCalculatingRoute = true);
-
     if (_selectedMode == TransportMode.metro) {
       final metro = _routingService.checkMetroAvailability(
         start: _startCoord,
@@ -273,7 +314,6 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
 
       setState(() {
         _metroRoute = metro;
-        _isCalculatingRoute = false;
         final dist = _getEffectiveRouteDistanceKm();
         final timing = _calculateDynamicTiming(distanceKm: dist, mode: TransportMode.metro);
         final checkIn = _calculateCheckInRecommendation(mode: TransportMode.metro, distanceKm: dist);
@@ -294,7 +334,6 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
       if (mounted) {
         setState(() {
           _roadRoute = road;
-          _isCalculatingRoute = false;
           final dist = road.distanceKm;
           final timing = _calculateDynamicTiming(distanceKm: dist, mode: _selectedMode);
           final checkIn = _calculateCheckInRecommendation(mode: _selectedMode, distanceKm: dist);
@@ -377,32 +416,28 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
 
     switch (mode) {
       case TransportMode.walking:
-        // Human walking speed: 4.6 km/h (~13.04 min/km).
-        // Pedestrians walk on sidewalks/paths and are exempt from motor traffic jams.
-        const speedKmh = 4.6;
-        final baseMinutes = math.max(5, ((distanceKm / speedKmh) * 60).round() + 2);
+        const walkingSpeed = 4.6;
+        final totalMins = math.max(5, ((distanceKm / walkingSpeed) * 60).round());
         return DynamicTimingPrediction(
-          totalMinutes: baseMinutes,
-          baseTravelMinutes: baseMinutes,
+          totalMinutes: totalMins,
+          baseTravelMinutes: totalMins,
           trafficDelayMinutes: 0,
-          averageSpeedKmh: speedKmh,
-          modeRationale: 'Pedestrian pace (~4.6 km/h) • Road traffic congestion exempt',
+          averageSpeedKmh: walkingSpeed,
+          modeRationale: 'Pedestrian walk • ~4.6 km/h steady pedestrian pace',
           traffic: const TrafficEstimation(
             congestionMultiplier: 1.0,
-            statusLabel: 'Pedestrian Pace',
-            description: 'Sidewalk route immune to vehicular road traffic jams',
+            statusLabel: 'Pedestrian Corridor',
+            description: 'Foot transit unaffected by vehicular traffic',
             badgeColor: AppColors.safeGreen,
             icon: Icons.directions_walk_rounded,
           ),
         );
 
       case TransportMode.auto:
-        // Auto-rickshaw: speed governed ~35-40 km/h; cruising speed 22-26 km/h.
-        final baseSpeed = distanceKm > 20 ? 26.0 : 22.0;
-        final autoTraffic = 1.0 + (traffic.congestionMultiplier - 1.0) * 0.85;
-        final effectiveSpeed = baseSpeed / autoTraffic;
-        final baseMins = ((distanceKm / baseSpeed) * 60).round() + 4;
-        final totalMins = math.max(8, ((distanceKm / effectiveSpeed) * 60).round() + 4);
+        final baseSpeed = distanceKm > 20 ? 32.0 : 25.0;
+        final effectiveSpeed = baseSpeed / traffic.congestionMultiplier;
+        final baseMins = ((distanceKm / baseSpeed) * 60).round() + 3;
+        final totalMins = math.max(8, ((distanceKm / effectiveSpeed) * 60).round() + 3);
         final delay = math.max(0, totalMins - baseMins);
 
         return DynamicTimingPrediction(
@@ -410,33 +445,15 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
           baseTravelMinutes: baseMins,
           trafficDelayMinutes: delay,
           averageSpeedKmh: effectiveSpeed,
-          modeRationale: 'Auto city transit (~${baseSpeed.toInt()} km/h) • Lane filtering flexibility',
+          modeRationale: 'Auto Rickshaw agile navigation through arterial lanes',
           traffic: traffic,
         );
 
       case TransportMode.cab:
-        // Cab/Taxi: city streets (28 km/h), arterial (42 km/h), expressways (72 km/h).
-        double baseSpeed;
-        int bufferMins;
-        String profile;
-
-        if (distanceKm > 60) {
-          baseSpeed = 72.0;
-          bufferMins = 12;
-          profile = 'Highway express cruising (~72 km/h base)';
-        } else if (distanceKm > 20) {
-          baseSpeed = 42.0;
-          bufferMins = 8;
-          profile = 'Arterial / suburban cab transit (~42 km/h base)';
-        } else {
-          baseSpeed = 28.0;
-          bufferMins = 5;
-          profile = 'City street driving (~28 km/h base)';
-        }
-
+        final baseSpeed = distanceKm > 30 ? 48.0 : 32.0;
         final effectiveSpeed = baseSpeed / traffic.congestionMultiplier;
-        final baseMins = ((distanceKm / baseSpeed) * 60).round() + bufferMins;
-        final totalMins = math.max(10, ((distanceKm / effectiveSpeed) * 60).round() + bufferMins);
+        final baseMins = ((distanceKm / baseSpeed) * 60).round() + 4;
+        final totalMins = math.max(10, ((distanceKm / effectiveSpeed) * 60).round() + 4);
         final delay = math.max(0, totalMins - baseMins);
 
         return DynamicTimingPrediction(
@@ -444,12 +461,11 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
           baseTravelMinutes: baseMins,
           trafficDelayMinutes: delay,
           averageSpeedKmh: effectiveSpeed,
-          modeRationale: profile,
+          modeRationale: 'Private four-wheeler / cab with highway acceleration',
           traffic: traffic,
         );
 
       case TransportMode.bus:
-        // Public Bus: frequent passenger stop dwelling
         final baseSpeed = distanceKm > 40 ? 50.0 : 18.0;
         final dwellFactor = distanceKm > 40 ? 1.08 : 1.25;
         final bufferMins = distanceKm > 40 ? 15 : 8;
@@ -469,7 +485,6 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
         );
 
       case TransportMode.metro:
-        // Dedicated rapid rail: 100% immune to road traffic jams
         int totalMins;
         if (_metroRoute != null && _metroRoute!.isAvailable) {
           totalMins = _metroRoute!.totalEstimatedMinutes;
@@ -515,7 +530,6 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
     final isNight = hour >= 21 || hour < 5;
     final isEvening = hour >= 18 && hour < 21;
 
-    // 1. Walking: Always High Alert (5 min) because pedestrians are directly exposed outdoors
     if (mode == TransportMode.walking) {
       return DynamicCheckInRecommendation(
         recommendedIntervalMinutes: 5,
@@ -531,7 +545,6 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
       );
     }
 
-    // 2. Metro: Crowded, CISF secured, high public presence -> Relaxed (20 min)
     if (mode == TransportMode.metro) {
       return const DynamicCheckInRecommendation(
         recommendedIntervalMinutes: 20,
@@ -543,80 +556,30 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
       );
     }
 
-    // 3. Long-Distance / Intercity Highway Route (> 45 km)
     if (distanceKm > 45) {
-      if (isNight) {
-        return const DynamicCheckInRecommendation(
-          recommendedIntervalMinutes: 5,
-          safetyTier: 'High Alert',
-          rationale: 'Silent Highway Corridor at Night: 5 min high-alert pings active for isolated stretches',
-          crowdContext: 'Silent Intercity Highway',
-          tierColor: AppColors.warningAmber,
-          icon: Icons.alt_route_rounded,
-        );
-      } else {
-        return const DynamicCheckInRecommendation(
-          recommendedIntervalMinutes: 10,
-          safetyTier: 'Balanced',
-          rationale: 'Intercity Highway Corridor: Balanced 10 min pings for long-distance transit',
-          crowdContext: 'Intercity Arterial',
-          tierColor: AppColors.safeGreen,
-          icon: Icons.alt_route_rounded,
-        );
-      }
+      return DynamicCheckInRecommendation(
+        recommendedIntervalMinutes: isNight ? 5 : 10,
+        safetyTier: isNight ? 'High Alert' : 'Balanced',
+        rationale: isNight
+            ? 'Silent Highway Corridor at Night: 5 min high-alert pings active'
+            : 'Intercity Highway Corridor: Balanced 10 min pings for long-distance transit',
+        crowdContext: isNight ? 'Silent Intercity Highway' : 'Intercity Arterial',
+        tierColor: isNight ? AppColors.warningAmber : AppColors.safeGreen,
+        icon: Icons.alt_route_rounded,
+      );
     }
 
-    // 4. Night Cab / Auto (Night window: 21:00 to 05:00)
     if (isNight) {
-      final hourDisplay = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
-      final ampm = hour >= 12 ? 'PM' : 'AM';
-      final minDisplay = now.minute.toString().padLeft(2, '0');
-      return DynamicCheckInRecommendation(
+      return const DynamicCheckInRecommendation(
         recommendedIntervalMinutes: 5,
         safetyTier: 'High Alert',
-        rationale: 'Night Solo Ride ($hourDisplay:$minDisplay $ampm): High-alert 5 min pings active for driver accountability',
+        rationale: 'Night Solo Ride: High-alert 5 min pings active for driver accountability',
         crowdContext: 'Private Vehicle (Night Isolation)',
         tierColor: AppColors.warningAmber,
         icon: Icons.nightlight_round,
       );
     }
 
-    // 5. Evening Cab / Auto (18:00 to 21:00)
-    if (isEvening) {
-      if (distanceKm > 15) {
-        return const DynamicCheckInRecommendation(
-          recommendedIntervalMinutes: 5,
-          safetyTier: 'High Alert',
-          rationale: 'Evening Transit: Tightened 5 min check-ins as darkness falls on outer routes',
-          crowdContext: 'Evening Suburban Transit',
-          tierColor: AppColors.warningAmber,
-          icon: Icons.wb_twilight_rounded,
-        );
-      } else {
-        return const DynamicCheckInRecommendation(
-          recommendedIntervalMinutes: 10,
-          safetyTier: 'Balanced',
-          rationale: 'Evening City Transit: Balanced 10 min check-ins along lit corridors',
-          crowdContext: 'Evening Urban Arterial',
-          tierColor: AppColors.safeGreen,
-          icon: Icons.wb_twilight_rounded,
-        );
-      }
-    }
-
-    // 6. Public Bus in daytime
-    if (mode == TransportMode.bus) {
-      return const DynamicCheckInRecommendation(
-        recommendedIntervalMinutes: 10,
-        safetyTier: 'Balanced',
-        rationale: 'Daylight Public Bus: Balanced 10 min check-ins with conductor & passenger presence',
-        crowdContext: 'Crowded Public Bus',
-        tierColor: AppColors.safeGreen,
-        icon: Icons.directions_bus_rounded,
-      );
-    }
-
-    // 7. Daytime Cab / Auto (05:00 to 18:00)
     return const DynamicCheckInRecommendation(
       recommendedIntervalMinutes: 10,
       safetyTier: 'Balanced',
@@ -627,7 +590,6 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
     );
   }
 
-  /// Sets journey duration clamped to realistic limits
   void _setSmartDuration(int minutes) {
     _durationMinutes = minutes.clamp(5, 1440);
   }
@@ -649,21 +611,14 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
     final hour = arrival.hour == 0 ? 12 : (arrival.hour > 12 ? arrival.hour - 12 : arrival.hour);
     final minute = arrival.minute.toString().padLeft(2, '0');
     final ampm = arrival.hour >= 12 ? 'PM' : 'AM';
-
-    final isTomorrow = arrival.day != now.day;
-    final dayLabel = isTomorrow ? ' (Tomorrow)' : '';
-    return '$hour:$minute $ampm$dayLabel';
+    return '$hour:$minute $ampm';
   }
 
   String _formatDurationDisplay(int totalMinutes) {
     final hours = totalMinutes ~/ 60;
     final mins = totalMinutes % 60;
-    if (hours == 0) {
-      return '$mins mins';
-    }
-    if (mins == 0) {
-      return '$hours hrs';
-    }
+    if (hours == 0) return '$mins mins';
+    if (mins == 0) return '$hours hrs';
     return '${hours}h ${mins}m';
   }
 
@@ -680,6 +635,8 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
         });
         if (_hasSelectedDestination) {
           _calculateActiveRoute();
+        } else {
+          _mapController.move(_startCoord, 16.0);
         }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -707,15 +664,11 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
   /// User taps on map to set Start or Destination pin
   Future<void> _handleMapTap(LatLng tapped) async {
     setState(() {
-      _isReverseGeocoding = true;
       if (_pinMode == MapPinMode.destination) {
         _destCoord = tapped;
         _hasSelectedDestination = true;
-        const distanceCalc = Distance();
-        final estKm = distanceCalc.as(LengthUnit.Kilometer, _startCoord, tapped) * 1.25;
-        if (!_isModeViable(_selectedMode, estKm)) {
-          _selectedMode = TransportMode.cab;
-        }
+        _isSheetUp = true;
+        _sheetExtent = 0.70;
       } else {
         _startCoord = tapped;
       }
@@ -727,24 +680,12 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
 
     if (mounted) {
       setState(() {
-        _isReverseGeocoding = false;
         if (_pinMode == MapPinMode.destination) {
           _destController.text = address;
         } else {
           _startController.text = address;
         }
       });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '${_pinMode == MapPinMode.destination ? "Destination" : "Start"} pin placed: $address',
-          ),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(milliseconds: 1500),
-          backgroundColor: AppColors.primaryViolet,
-        ),
-      );
     }
   }
 
@@ -760,7 +701,7 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
       _mapController.fitCamera(
         CameraFit.bounds(
           bounds: bounds,
-          padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 48),
+          padding: const EdgeInsets.only(top: 80, bottom: 320, left: 40, right: 40),
           maxZoom: 16.5,
         ),
       );
@@ -771,25 +712,18 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
     }
   }
 
-  /// Dynamic Autocomplete based on what the user types (e.g. 'de' -> Delhi, Dehradun...)
+  /// Dynamic Autocomplete based on what the user types
   Future<void> _onDestinationTextChanged(String query) async {
     _searchDebounceTimer?.cancel();
     final clean = query.trim().toLowerCase();
     if (clean.isEmpty) {
-      setState(() {
-        _dynamicSuggestions = const [];
-      });
+      setState(() => _dynamicSuggestions = const []);
       return;
     }
 
-    // 1. Instant prefix match from comprehensive catalog
     final catalogMatches = _routingService.filterSearchCatalog(clean);
+    setState(() => _dynamicSuggestions = catalogMatches);
 
-    setState(() {
-      _dynamicSuggestions = catalogMatches;
-    });
-
-    // 2. Debounced query geocoding API if query has at least 3 characters and local matches are few
     if (clean.length >= 3 && catalogMatches.length < 3) {
       _searchDebounceTimer = Timer(const Duration(milliseconds: 250), () async {
         try {
@@ -809,9 +743,7 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
               _dynamicSuggestions = [...catalogMatches, ...additional];
             });
           }
-        } catch (e) {
-          debugPrint('Geocode suggestion error: $e');
-        }
+        } catch (_) {}
       });
     }
   }
@@ -819,39 +751,37 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
   void _selectDestinationSuggestion(SearchLocationPreset preset) {
     _searchDebounceTimer?.cancel();
     final dest = LatLng(preset.latitude, preset.longitude);
-    const distanceCalc = Distance();
-    final estKm = distanceCalc.as(LengthUnit.Kilometer, _startCoord, dest) * 1.25;
-
-    // Interactive logical check: auto-switch mode if current mode is not viable for this distance
-    if (!_isModeViable(_selectedMode, estKm)) {
-      final oldMode = _selectedMode;
-      _selectedMode = TransportMode.cab;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Switched from ${oldMode.label} to Cab / Taxi: ${estKm.toStringAsFixed(0)} km exceeds ${oldMode.label.toLowerCase()} range.',
-              ),
-              behavior: SnackBarBehavior.floating,
-              backgroundColor: AppColors.primaryViolet,
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
-      });
-    }
 
     setState(() {
       _destCoord = dest;
       _destController.text = preset.title;
       _hasSelectedDestination = true;
+      _isSheetUp = true;
+      _sheetExtent = 0.70;
       _dynamicSuggestions = const [];
+      _isSearching = false;
     });
 
     _calculateActiveRoute();
     FocusScope.of(context).unfocus();
   }
+
+  void _selectRecentDestination(RecentDestinationItem item) {
+    setState(() {
+      _destCoord = item.point;
+      _destController.text = item.title;
+      _hasSelectedDestination = true;
+      _isSheetUp = true;
+      _sheetExtent = 0.70;
+      _isSearching = false;
+    });
+
+    _calculateActiveRoute();
+  }
+
+  // =========================================================================
+  // BUILD METHOD
+  // =========================================================================
 
   @override
   Widget build(BuildContext context) {
@@ -859,96 +789,881 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
     final effectiveDistanceKm = _getEffectiveRouteDistanceKm();
 
     return Scaffold(
-      backgroundColor: isDark ? AppColors.midnightDarkBackground : AppColors.lightBackground,
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: widget.onBack,
+      backgroundColor: isDark ? AppColors.midnightDarkBackground : Colors.white,
+      body: Stack(
+        children: [
+          // 1. Full-Screen Interactive Map
+          Positioned.fill(
+            child: _buildMapLayer(isDark),
+          ),
+
+          // 2. Floating Top Header Controls (Back Button, Contacts, Layer Toggle, GPS)
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 10,
+            left: 16,
+            right: 16,
+            child: _buildTopControlBar(isDark),
+          ),
+
+          // 3. Floating Pickup Address Pill (Visible on Map ONLY when bottom sheet is UP)
+          if (_isSheetUp && !_hasSelectedDestination && !_isSearching)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: (MediaQuery.of(context).size.height * _sheetExtent) + 14,
+              child: _buildFloatingPickupPill(isDark),
+            ),
+
+          // 4. SheMove Journey Bottom Sheet (Home or Ride Setup)
+          if (!_isSearching)
+            NotificationListener<DraggableScrollableNotification>(
+              onNotification: (notification) {
+                final isUp = notification.extent > 0.48;
+                if (isUp != _isSheetUp || (_sheetExtent - notification.extent).abs() > 0.03) {
+                  setState(() {
+                    _isSheetUp = isUp;
+                    _sheetExtent = notification.extent;
+                  });
+                }
+                return true;
+              },
+              child: DraggableScrollableSheet(
+                key: ValueKey(_hasSelectedDestination ? 'ride_setup_sheet' : 'home_sheet'),
+                initialChildSize: _hasSelectedDestination ? 0.70 : 0.68,
+                minChildSize: _hasSelectedDestination ? 0.30 : 0.28,
+                maxChildSize: 0.92,
+                snap: true,
+                snapSizes: _hasSelectedDestination ? const [0.30, 0.70, 0.92] : const [0.28, 0.68, 0.92],
+                builder: (context, scrollController) {
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: isDark ? AppColors.midnightDarkSurface : Colors.white,
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: isDark ? 0.4 : 0.12),
+                          blurRadius: 18,
+                          offset: const Offset(0, -4),
+                        ),
+                      ],
+                    ),
+                    child: _hasSelectedDestination
+                        ? _buildRideSetupContent(isDark, effectiveDistanceKm, scrollController)
+                        : _buildHomeSheetContent(isDark, scrollController),
+                  );
+                },
+              ),
+            ),
+
+          // 5. Search Overlay (Triggered by Search Bar)
+          if (_isSearching)
+            Positioned.fill(
+              child: _buildSearchOverlay(isDark),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // =========================================================================
+  // MAP COMPONENT & PIN MARKERS
+  // =========================================================================
+
+  Widget _buildMapLayer(bool isDark) {
+    final isMetroMode = _selectedMode == TransportMode.metro;
+    final hasMetroLine = isMetroMode && _metroRoute != null && _metroRoute!.isAvailable;
+
+    return FlutterMap(
+      mapController: _mapController,
+      options: MapOptions(
+        initialCenter: _startCoord,
+        initialZoom: 15.5,
+        minZoom: 3.0,
+        maxZoom: 19.0,
+        onTap: (tapPosition, latLng) => _handleMapTap(latLng),
+      ),
+      children: [
+        // Tile Layer
+        TileLayer(
+          urlTemplate: _mapLayerStyle == MapLayerStyle.satellite
+              ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}.jpg'
+              : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          userAgentPackageName: 'com.shemove.app',
+          maxZoom: 19,
         ),
-        title: const Text(
-          'Plan Protected Journey',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+
+        if (_mapLayerStyle == MapLayerStyle.satellite)
+          TileLayer(
+            urlTemplate:
+                'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}.png',
+            userAgentPackageName: 'com.shemove.app',
+            maxZoom: 19,
+          ),
+
+        // Route Polyline / Metro Track
+        if (_hasSelectedDestination) ...[
+          if (hasMetroLine) ...[
+            PolylineLayer(
+              polylines: [
+                Polyline(
+                  points: _metroRoute!.metroPath,
+                  color: Colors.black.withValues(alpha: 0.6),
+                  strokeWidth: 8.0,
+                  strokeCap: StrokeCap.round,
+                ),
+                Polyline(
+                  points: _metroRoute!.metroPath,
+                  color: _metroRoute!.primaryLineColor,
+                  strokeWidth: 5.5,
+                  strokeCap: StrokeCap.round,
+                ),
+                Polyline(
+                  points: [_startCoord, _metroRoute!.originStation!.latLng],
+                  color: AppColors.infoBlue,
+                  strokeWidth: 3.0,
+                  pattern: StrokePattern.dashed(segments: const [6, 4]),
+                ),
+                Polyline(
+                  points: [_metroRoute!.destinationStation!.latLng, _destCoord],
+                  color: AppColors.safeGreen,
+                  strokeWidth: 3.0,
+                  pattern: StrokePattern.dashed(segments: const [6, 4]),
+                ),
+              ],
+            ),
+          ] else ...[
+            // Road Polyline
+            PolylineLayer(
+              polylines: [
+                Polyline(
+                  points: _roadRoute?.polylinePoints ?? [_startCoord, _destCoord],
+                  color: const Color(0xFF1976D2),
+                  strokeWidth: 5.0,
+                  strokeCap: StrokeCap.round,
+                ),
+              ],
+            ),
+          ],
+        ],
+
+        // Marker Layer
+        MarkerLayer(
+          markers: [
+            // 1. Pickup Point Marker (Shows "Pickup Point" when bottom sheet is DOWNED, exact address when UP)
+            Marker(
+              point: _startCoord,
+              width: _isSheetUp ? 260 : 140,
+              height: 70,
+              alignment: Alignment.bottomCenter,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 240),
+                    transitionBuilder: (child, animation) => FadeTransition(
+                      opacity: animation,
+                      child: ScaleTransition(scale: animation, child: child),
+                    ),
+                    child: !_isSheetUp
+                        ? Column(
+                            key: const ValueKey('pickup_badge_downed'),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Green Pill Badge: "Pickup Point" (Shown when sheet is DOWNED)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF00875A),
+                                  borderRadius: BorderRadius.circular(16),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.25),
+                                      blurRadius: 6,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: const Text(
+                                  'Pickup Point',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 12,
+                                    letterSpacing: 0.2,
+                                  ),
+                                ),
+                              ),
+                              CustomPaint(
+                                size: const Size(10, 5),
+                                painter: _TrianglePointerPainter(color: const Color(0xFF00875A)),
+                              ),
+                            ],
+                          )
+                        : Column(
+                            key: const ValueKey('exact_address_badge_up'),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Exact Address Bubble (Shown when sheet is UP)
+                              Container(
+                                constraints: const BoxConstraints(maxWidth: 250),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: isDark ? AppColors.midnightDarkSurface : Colors.white,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: isDark ? Colors.white24 : const Color(0xFFE2E8F0),
+                                    width: 1.2,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: isDark ? 0.4 : 0.18),
+                                      blurRadius: 10,
+                                      offset: const Offset(0, 3),
+                                    ),
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        border: Border.all(color: const Color(0xFF00875A), width: 2),
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Flexible(
+                                      child: Text(
+                                        _startController.text,
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 11.5,
+                                          color: isDark ? Colors.white : const Color(0xFF1E2022),
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              CustomPaint(
+                                size: const Size(10, 5),
+                                painter: _TrianglePointerPainter(
+                                  color: isDark ? AppColors.midnightDarkSurface : Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                  const SizedBox(height: 2),
+                  // Concentric Blue Dot Marker
+                  Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF1976D2).withValues(alpha: 0.25),
+                    ),
+                    child: Center(
+                      child: Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF1976D2),
+                          border: Border.all(color: Colors.white, width: 2.5),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 4,
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: Container(
+                            width: 5,
+                            height: 5,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Color(0xFF0D47A1),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // 2. Destination Marker (when selected)
+            if (_hasSelectedDestination)
+              Marker(
+                point: _destCoord,
+                width: 44,
+                height: 50,
+                alignment: Alignment.bottomCenter,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFD32F2F),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.3),
+                            blurRadius: 8,
+                          ),
+                        ],
+                      ),
+                      child: const Icon(Icons.location_on_rounded, color: Colors.white, size: 18),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // =========================================================================
+  // TOP CONTROLS & FLOATING PICKUP PILL
+  // =========================================================================
+
+  Widget _buildTopControlBar(bool isDark) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        // Circular White Back Button
+        _buildCircleButton(
+          icon: Icons.arrow_back,
+          isDark: isDark,
+          onTap: () {
+            if (_hasSelectedDestination) {
+              setState(() {
+                _hasSelectedDestination = false;
+                _isSheetUp = true;
+                _sheetExtent = 0.68;
+              });
+            } else {
+              widget.onBack();
+            }
+          },
+        ),
+
+        // Right Action Group (Layer Toggle & GPS Recenter & Contacts)
+        Row(
+          children: [
+            if (widget.onOpenContacts != null) ...[
+              _buildCircleButton(
+                icon: Icons.people_alt_outlined,
+                isDark: isDark,
+                iconColor: AppColors.primaryCobalt,
+                onTap: () => widget.onOpenContacts?.call(),
+              ),
+              const SizedBox(width: 8),
+            ],
+            _buildCircleButton(
+              icon: _mapLayerStyle == MapLayerStyle.satellite
+                  ? Icons.map_rounded
+                  : Icons.satellite_alt_rounded,
+              isDark: isDark,
+              onTap: () {
+                setState(() {
+                  _mapLayerStyle = _mapLayerStyle == MapLayerStyle.satellite
+                      ? MapLayerStyle.streets
+                      : MapLayerStyle.satellite;
+                });
+              },
+            ),
+            const SizedBox(width: 8),
+            _buildCircleButton(
+              icon: _isLocatingUser ? Icons.hourglass_top : Icons.my_location,
+              isDark: isDark,
+              iconColor: const Color(0xFF00875A),
+              onTap: _fetchAndUseCurrentGps,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCircleButton({
+    required IconData icon,
+    required bool isDark,
+    required VoidCallback onTap,
+    Color? iconColor,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(22),
+        child: Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: isDark ? AppColors.midnightDarkSurface : Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.14),
+                blurRadius: 10,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Icon(
+            icon,
+            size: 20,
+            color: iconColor ?? (isDark ? Colors.white : const Color(0xFF1E2022)),
+          ),
         ),
       ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 1. Origin & Highlighted Destination Input
-              _buildOriginAndHighlightedDestinationCard(isDark),
-              const SizedBox(height: 8),
+    );
+  }
 
-              // 2. Real-Time Dynamic Typed Autocomplete Suggestions
-              if (_dynamicSuggestions.isNotEmpty) ...[
-                _buildTypedSuggestionsDropdown(isDark),
-                const SizedBox(height: 16),
-              ],
-
-              // 3. Interactive Route Map (Revealed upon selecting destination)
-              if (_hasSelectedDestination) ...[
-                const SizedBox(height: 8),
-                _buildInteractiveMapSection(isDark, effectiveDistanceKm),
-                const SizedBox(height: 18),
-
-                // Metro Train Route Status (if Metro is selected)
-                if (_selectedMode == TransportMode.metro) ...[
-                  _buildMetroRouteStatusCard(isDark),
-                  const SizedBox(height: 16),
-                ],
-
-
-                // 4. Transport Mode Selector
-                _buildTransportModeSelector(isDark),
-                const SizedBox(height: 16),
-
-                // 5. Vehicle Registration Number (Cab, Auto, Bus)
-                if (_selectedMode == TransportMode.cab ||
-                    _selectedMode == TransportMode.auto ||
-                    _selectedMode == TransportMode.bus) ...[
-                  _buildVehicleNumberInput(isDark),
-                  const SizedBox(height: 16),
-                ],
-
-                // 6. Simplified Estimated Journey Time Card
-                _buildEstimatedTimeCard(isDark),
-                const SizedBox(height: 16),
-
-                // 7. Separate Simplified Adaptive Check-In Frequency Card
-                _buildAdaptiveCheckInCard(isDark),
-                const SizedBox(height: 16),
-
-                // 7. Corridor Geofence Toggle
-                _buildGeofenceCard(isDark),
-                const SizedBox(height: 16),
-
-                // 8. Escort Guardians Selection for This Trip
-                _buildContactsNotificationPreview(isDark),
-                const SizedBox(height: 24),
-
-                // 9. Modern Interactive Animated Swipe Slider
-                SwipeActionControl(
-                  label: 'Swipe right to arm journey protection',
-                  confirmedLabel: 'PROTECTED ESCORT ACTIVE',
-                  sliderColor: AppColors.primaryViolet,
-                  onConfirmed: () {
-                    final waypoints = _getEffectiveRouteWaypoints();
-                    widget.onStartJourney(
-                      _startController.text,
-                      _destController.text,
-                      _selectedMode,
-                      _vehicleController.text,
-                      _durationMinutes,
-                      _checkInInterval,
-                      _geofenceEnabled,
-                      _selectedContactIds.toList(),
-                      waypoints,
-                    );
-                  },
+  /// Floating Pickup Address Pill (Visible on Map above the Bottom Sheet)
+  Widget _buildFloatingPickupPill(bool isDark) {
+    return Center(
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 380),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: isDark ? AppColors.midnightDarkSurface : Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.4 : 0.12),
+              blurRadius: 12,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Green Ring Dot
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFF00875A), width: 3),
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Pickup Address Text
+            Flexible(
+              child: Text(
+                _startController.text,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12.5,
+                  color: isDark ? Colors.white : const Color(0xFF1E2022),
                 ),
-                const SizedBox(height: 28),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: isDark ? Colors.white60 : Colors.black45,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =========================================================================
+  // SHEMOVE HOME BOTTOM SHEET CONTENT (FOCUSED ON PROTECTED TRAVEL)
+  // =========================================================================
+
+  Widget _buildHomeSheetContent(bool isDark, ScrollController scrollController) {
+    return ListView(
+      controller: scrollController,
+      padding: EdgeInsets.zero,
+      children: [
+        // Drag Handle
+        Center(
+          child: Container(
+            margin: const EdgeInsets.only(top: 10, bottom: 12),
+            width: 40,
+            height: 4.5,
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white24 : Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+        ),
+
+        // "Where do you want to go?" Search Bar Pill
+        GestureDetector(
+          onTap: () => setState(() => _isSearching = true),
+          child: Container(
+            height: 52,
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: isDark ? AppColors.midnightDarkSurfaceVariant : Colors.white,
+              borderRadius: BorderRadius.circular(26),
+              border: Border.all(
+                color: isDark ? AppColors.midnightDarkCardBorder : const Color(0xFFE2E8F0),
+                width: 1.2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFFFB800).withValues(alpha: 0.32),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
               ],
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                const Icon(Icons.search_rounded, color: Colors.black87, size: 22),
+                const SizedBox(width: 12),
+                Text(
+                  'Where do you want to go?',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? Colors.white : const Color(0xFF1E2022),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // 3 Recent Destinations matching user screenshot
+        ..._recentDestinations.asMap().entries.map((entry) {
+          final index = entry.key;
+          final item = entry.value;
+          final isFavorited = _favoritedTitles.contains(item.title);
+
+          return Column(
+            children: [
+              InkWell(
+                onTap: () => _selectRecentDestination(item),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Row(
+                    children: [
+                      // Clock / History Icon
+                      Icon(
+                        Icons.history_rounded,
+                        size: 22,
+                        color: isDark ? Colors.white60 : const Color(0xFF6B7280),
+                      ),
+                      const SizedBox(width: 14),
+
+                      // Title & Subtitle
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.title,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: isDark ? Colors.white : const Color(0xFF1E2022),
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              item.subtitle,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDark ? AppColors.textSecondary : const Color(0xFF6B7280),
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // Heart Bookmark Outline
+                      IconButton(
+                        icon: Icon(
+                          isFavorited ? Icons.favorite : Icons.favorite_border_rounded,
+                          size: 20,
+                          color: isFavorited
+                              ? const Color(0xFFE53935)
+                              : (isDark ? Colors.white54 : const Color(0xFF757575)),
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            if (isFavorited) {
+                              _favoritedTitles.remove(item.title);
+                            } else {
+                              _favoritedTitles.add(item.title);
+                            }
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (index < _recentDestinations.length - 1)
+                Divider(
+                  height: 1,
+                  indent: 52,
+                  endIndent: 16,
+                  color: isDark ? Colors.white12 : Colors.grey.shade200,
+                ),
+            ],
+          );
+        }),
+
+        Divider(
+          height: 1,
+          indent: 52,
+          endIndent: 16,
+          color: isDark ? Colors.white12 : Colors.grey.shade200,
+        ),
+
+        // Choose Location on Map option
+        InkWell(
+          onTap: () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Tap anywhere on the map above to place your destination pin'),
+                behavior: SnackBarBehavior.floating,
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.pin_drop_outlined,
+                  size: 22,
+                  color: Color(0xFF00875A),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Set destination on map',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: isDark ? Colors.white : const Color(0xFF1E2022),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Tap directly on the interactive map to select destination',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? AppColors.textSecondary : const Color(0xFF6B7280),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded, color: Colors.grey, size: 20),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        // Protected Transit Modes Section
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Text(
+            'Protected Transit Modes',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+              color: isDark ? Colors.white : const Color(0xFF2C3E50),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              _buildTransitModeCard(
+                mode: TransportMode.cab,
+                label: 'Cab / Taxi',
+                subtitle: 'Driver track',
+                icon: Icons.local_taxi_rounded,
+                color: AppColors.primaryCobalt,
+                isDark: isDark,
+              ),
+              const SizedBox(width: 8),
+              _buildTransitModeCard(
+                mode: TransportMode.auto,
+                label: 'Auto Rickshaw',
+                subtitle: 'Live GPS guard',
+                icon: Icons.electric_rickshaw_rounded,
+                color: AppColors.warningAmber,
+                isDark: isDark,
+              ),
+              const SizedBox(width: 8),
+              _buildTransitModeCard(
+                mode: TransportMode.metro,
+                label: 'Metro Express',
+                subtitle: 'CISF secure',
+                icon: Icons.subway_rounded,
+                color: const Color(0xFF00875A),
+                isDark: isDark,
+              ),
+              const SizedBox(width: 8),
+              _buildTransitModeCard(
+                mode: TransportMode.walking,
+                label: 'Walk Escort',
+                subtitle: '5m check-ins',
+                icon: Icons.directions_walk_rounded,
+                color: const Color(0xFFFF5252),
+                isDark: isDark,
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 22),
+
+        // SheMove Safety Shield Highlights
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Text(
+            'SheMove Journey Protection',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+              color: isDark ? Colors.white : const Color(0xFF2C3E50),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        SizedBox(
+          height: 110,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            physics: const BouncingScrollPhysics(),
+            children: [
+              _buildSafetyFeatureCard(
+                title: 'Live Route Tracking',
+                description: 'Real-time GPS telemetry continuously shared with your designated guardians.',
+                icon: Icons.navigation_rounded,
+                accentColor: const Color(0xFF00875A),
+                isDark: isDark,
+              ),
+              const SizedBox(width: 10),
+              _buildSafetyFeatureCard(
+                title: 'Adaptive Check-Ins',
+                description: 'Discreet vibration prompts auto-escalate to emergency contacts if unanswered.',
+                icon: Icons.access_time_rounded,
+                accentColor: AppColors.primaryCobalt,
+                isDark: isDark,
+              ),
+              const SizedBox(width: 10),
+              _buildSafetyFeatureCard(
+                title: 'Guardian SOS Telemetry',
+                description: 'Real-time GPS breadcrumbs & arrival telemetry shared with your trusted circle.',
+                icon: Icons.people_alt_rounded,
+                accentColor: AppColors.warningAmber,
+                isDark: isDark,
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  Widget _buildTransitModeCard({
+    required TransportMode mode,
+    required String label,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required bool isDark,
+  }) {
+    final isSelected = _selectedMode == mode;
+
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _selectedMode = mode;
+            _isSearching = true;
+          });
+        },
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? color.withValues(alpha: isDark ? 0.25 : 0.12)
+                : (isDark ? AppColors.midnightDarkSurfaceVariant : const Color(0xFFF7F8FA)),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isSelected ? color : Colors.transparent,
+              width: 1.5,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 24, color: isSelected ? color : (isDark ? Colors.white70 : Colors.black87)),
+              const SizedBox(height: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? Colors.white : Colors.black87,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: 9,
+                  color: isDark ? AppColors.textSecondary : const Color(0xFF6B7280),
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ],
           ),
         ),
@@ -956,962 +1671,384 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
     );
   }
 
-  /// Highlights destination field with glow outline and clean layout
-  Widget _buildOriginAndHighlightedDestinationCard(bool isDark) {
+  Widget _buildSafetyFeatureCard({
+    required String title,
+    required String description,
+    required IconData icon,
+    required Color accentColor,
+    required bool isDark,
+  }) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      width: 230,
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface,
-        borderRadius: BorderRadius.circular(22),
+        color: isDark ? AppColors.midnightDarkSurfaceVariant : const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: isDark ? AppColors.midnightDarkCardBorder : AppColors.lightCardBorder,
+          color: isDark ? AppColors.midnightDarkCardBorder : Colors.black.withValues(alpha: 0.05),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.05),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Starting Point Field
-          TextField(
-            controller: _startController,
-            onChanged: (val) {
-              if (_hasSelectedDestination) {
-                _calculateActiveRoute();
-              }
-            },
-            style: const TextStyle(fontSize: 13),
-            decoration: InputDecoration(
-              labelText: 'Starting Location',
-              prefixIcon: IconButton(
-                icon: _isLocatingUser
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.my_location, color: AppColors.infoBlue),
-                tooltip: 'Fetch Current GPS Location',
-                onPressed: _fetchAndUseCurrentGps,
-              ),
-              suffixIcon: Container(
-                margin: const EdgeInsets.only(right: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppColors.infoBlue.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text(
-                  'GPS Live',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.infoBlue,
-                  ),
-                ),
-              ),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: const BorderSide(color: AppColors.primaryViolet, width: 1.5),
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-
-          // Prominently Highlighted Destination Address Input
-          Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: _hasSelectedDestination
-                    ? AppColors.safeGreen
-                    : AppColors.primaryViolet.withValues(alpha: 0.8),
-                width: 2.0,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: (_hasSelectedDestination ? AppColors.safeGreen : AppColors.primaryViolet)
-                      .withValues(alpha: isDark ? 0.25 : 0.12),
-                  blurRadius: 12,
-                  spreadRadius: 1,
-                ),
-              ],
-            ),
-            child: TextField(
-              controller: _destController,
-              autofocus: !_hasSelectedDestination,
-              onChanged: _onDestinationTextChanged,
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-              decoration: InputDecoration(
-                labelText: 'Destination Address',
-                labelStyle: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: _hasSelectedDestination ? AppColors.safeGreen : AppColors.primaryViolet,
-                ),
-                hintText: 'Search city, landmark or transit hub...',
-                hintStyle: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.normal,
-                  color: isDark ? AppColors.textMuted : AppColors.lightTextSecondary,
-                ),
-                prefixIcon: Icon(
-                  Icons.location_on_rounded,
-                  color: _hasSelectedDestination ? AppColors.safeGreen : AppColors.primaryViolet,
-                  size: 24,
-                ),
-                suffixIcon: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_destController.text.isNotEmpty)
-                      IconButton(
-                        icon: const Icon(Icons.clear, size: 18),
-                        onPressed: () {
-                          _destController.clear();
-                          setState(() {
-                            _dynamicSuggestions = const [];
-                            _hasSelectedDestination = false;
-                          });
-                        },
-                      ),
-                    Container(
-                      margin: const EdgeInsets.only(right: 8),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryViolet,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Text(
-                        'SEARCH',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Dynamic Autocomplete Suggestion Dropdown based strictly on user typing
-  Widget _buildTypedSuggestionsDropdown(bool isDark) {
-    return Container(
-      constraints: const BoxConstraints(maxHeight: 250),
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.midnightDarkSurfaceVariant : AppColors.lightSurface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: AppColors.primaryViolet.withValues(alpha: 0.4),
-          width: 1.5,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.28),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: Material(
-          color: Colors.transparent,
-          child: ListView.separated(
-            shrinkWrap: true,
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            itemCount: _dynamicSuggestions.length,
-            separatorBuilder: (context, index) => const Divider(height: 1, indent: 52),
-            itemBuilder: (context, index) {
-              final suggestion = _dynamicSuggestions[index];
-              return ListTile(
-                dense: true,
-                leading: Container(
-                  padding: const EdgeInsets.all(7),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryViolet.withValues(alpha: 0.18),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(suggestion.icon, size: 18, color: AppColors.primaryViolet),
-                ),
-                title: Text(
-                  suggestion.title,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                ),
-                subtitle: Text(
-                  suggestion.subtitle,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: const Icon(Icons.north_west, size: 14, color: AppColors.primaryViolet),
-                onTap: () => _selectDestinationSuggestion(suggestion),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInteractiveMapSection(bool isDark, double routeDistanceKm) {
-    final isMetroMode = _selectedMode == TransportMode.metro;
-    final hasMetroLine = isMetroMode && _metroRoute != null && _metroRoute!.isAvailable;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF070B19),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark ? AppColors.midnightDarkCardBorder : AppColors.lightCardBorder,
-          width: 1.5,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.3),
-            blurRadius: 14,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          // Map Control & Mode Tool Bar (horizontally scrollable to eliminate right overflow)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            color: isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      InkWell(
-                        onTap: () => setState(() => _pinMode = MapPinMode.destination),
-                        borderRadius: BorderRadius.circular(10),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: _pinMode == MapPinMode.destination
-                                ? AppColors.safeGreen.withValues(alpha: 0.2)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: _pinMode == MapPinMode.destination
-                                  ? AppColors.safeGreen
-                                  : Colors.transparent,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.place, size: 14, color: AppColors.safeGreen),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Pick Dest',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: _pinMode == MapPinMode.destination
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
-                                  color: _pinMode == MapPinMode.destination
-                                      ? AppColors.safeGreen
-                                      : (isDark ? AppColors.textSecondary : AppColors.lightTextSecondary),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      InkWell(
-                        onTap: () => setState(() => _pinMode = MapPinMode.start),
-                        borderRadius: BorderRadius.circular(10),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: _pinMode == MapPinMode.start
-                                ? AppColors.primaryCobalt.withValues(alpha: 0.2)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: _pinMode == MapPinMode.start
-                                  ? AppColors.primaryCobalt
-                                  : Colors.transparent,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.flag, size: 14, color: AppColors.primaryCobalt),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Pick Start',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: _pinMode == MapPinMode.start
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
-                                  color: _pinMode == MapPinMode.start
-                                      ? AppColors.primaryCobalt
-                                      : (isDark ? AppColors.textSecondary : AppColors.lightTextSecondary),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(width: 12),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.refresh, size: 18, color: AppColors.safeGreen),
-                        tooltip: 'Recalculate Route',
-                        onPressed: _calculateActiveRoute,
-                      ),
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        icon: Icon(
-                          _mapLayerStyle == MapLayerStyle.satellite
-                              ? Icons.satellite_alt
-                              : Icons.map,
-                          size: 18,
-                          color: AppColors.primaryCobalt,
-                        ),
-                        tooltip: 'Toggle Satellite / Streets',
-                        onPressed: () {
-                          setState(() {
-                            _mapLayerStyle = _mapLayerStyle == MapLayerStyle.satellite
-                                ? MapLayerStyle.streets
-                                : MapLayerStyle.satellite;
-                          });
-                        },
-                      ),
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.fit_screen, size: 18, color: AppColors.infoBlue),
-                        tooltip: 'Fit route in view',
-                        onPressed: _fitMapBounds,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Map View with Polyline & Markers
-          SizedBox(
-            height: 250,
-            child: Stack(
-              children: [
-                FlutterMap(
-                  mapController: _mapController,
-                  options: MapOptions(
-                    initialCenter: _destCoord,
-                    initialZoom: 13.0,
-                    minZoom: 3.0,
-                    maxZoom: 19.0,
-                    onTap: (tapPosition, latLng) => _handleMapTap(latLng),
-                  ),
-                  children: [
-                    TileLayer(
-                      urlTemplate: _mapLayerStyle == MapLayerStyle.satellite
-                          ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}.jpg'
-                          : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.shemove.app',
-                      maxZoom: 19,
-                    ),
-
-                    if (_mapLayerStyle == MapLayerStyle.satellite)
-                      TileLayer(
-                        urlTemplate:
-                            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}.png',
-                        userAgentPackageName: 'com.shemove.app',
-                        maxZoom: 19,
-                      ),
-
-                    // 1. Metro Track (if Metro selected & available)
-                    if (hasMetroLine) ...[
-                      PolylineLayer(
-                        polylines: [
-                          Polyline(
-                            points: _metroRoute!.metroPath,
-                            color: Colors.black.withValues(alpha: 0.6),
-                            strokeWidth: 8.0,
-                            strokeCap: StrokeCap.round,
-                            strokeJoin: StrokeJoin.round,
-                          ),
-                          Polyline(
-                            points: _metroRoute!.metroPath,
-                            color: _metroRoute!.primaryLineColor,
-                            strokeWidth: 5.5,
-                            strokeCap: StrokeCap.round,
-                            strokeJoin: StrokeJoin.round,
-                          ),
-                          Polyline(
-                            points: [_startCoord, _metroRoute!.originStation!.latLng],
-                            color: AppColors.infoBlue,
-                            strokeWidth: 3.0,
-                            pattern: StrokePattern.dashed(segments: [6, 4]),
-                          ),
-                          Polyline(
-                            points: [_metroRoute!.destinationStation!.latLng, _destCoord],
-                            color: AppColors.safeGreen,
-                            strokeWidth: 3.0,
-                            pattern: StrokePattern.dashed(segments: [6, 4]),
-                          ),
-                        ],
-                      ),
-
-                      MarkerLayer(
-                        markers: _metroRoute!.passedStations.map((station) {
-                          return Marker(
-                            point: station.latLng,
-                            width: 14,
-                            height: 14,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: _metroRoute!.primaryLineColor, width: 3),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.4),
-                                    blurRadius: 4,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ]
-                    // 2. Road Network with Corridor Geofence & Clean Route Polyline
-                    else ...[
-                      // Geofence Protection Corridor Envelope
-                      if (_geofenceEnabled)
-                        PolylineLayer(
-                          polylines: [
-                            Polyline(
-                              points: _roadRoute?.polylinePoints ?? [_startCoord, _destCoord],
-                              color: AppColors.infoBlue.withValues(alpha: isDark ? 0.22 : 0.14),
-                              strokeWidth: _geofenceRadiusMeters == 150
-                                  ? 22.0
-                                  : (_geofenceRadiusMeters == 300 ? 32.0 : 44.0),
-                              strokeCap: StrokeCap.round,
-                              strokeJoin: StrokeJoin.round,
-                            ),
-                            Polyline(
-                              points: _roadRoute?.polylinePoints ?? [_startCoord, _destCoord],
-                              color: AppColors.infoBlue.withValues(alpha: isDark ? 0.45 : 0.3),
-                              strokeWidth: 1.5,
-                              pattern: StrokePattern.dashed(segments: [6, 4]),
-                            ),
-                          ],
-                        ),
-
-                      // Clean Single Route Polyline
-                      PolylineLayer(
-                        polylines: [
-                          Polyline(
-                            points: _roadRoute?.polylinePoints ?? [_startCoord, _destCoord],
-                            color: AppColors.primaryViolet,
-                            strokeWidth: 4.5,
-                            strokeCap: StrokeCap.round,
-                            strokeJoin: StrokeJoin.round,
-                          ),
-                        ],
-                      ),
-                    ],
-
-                    MarkerLayer(
-                      markers: [
-                        // Start Marker
-                        Marker(
-                          point: _startCoord,
-                          width: 56,
-                          height: 56,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(5),
-                                decoration: BoxDecoration(
-                                  color: AppColors.primaryViolet,
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: AppColors.primaryViolet.withValues(alpha: 0.5),
-                                      blurRadius: 8,
-                                    ),
-                                  ],
-                                  border: Border.all(color: Colors.white, width: 2),
-                                ),
-                                child: const Icon(Icons.flag, color: Colors.white, size: 14),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.75),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: const Text(
-                                  'START',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-
-                        // Destination Marker
-                        Marker(
-                          point: _destCoord,
-                          width: 56,
-                          height: 56,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  color: AppColors.safeGreen,
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: AppColors.safeGreen.withValues(alpha: 0.6),
-                                      blurRadius: 10,
-                                    ),
-                                  ],
-                                  border: Border.all(color: Colors.white, width: 2),
-                                ),
-                                child: const Icon(Icons.location_on, color: Colors.white, size: 16),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.8),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: const Text(
-                                  'DEST',
-                                  style: TextStyle(
-                                    color: AppColors.safeGreenGlow,
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-
-                // Floating HUD: Distance & Route Status
-                Positioned(
-                  top: 10,
-                  left: 10,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.84),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          hasMetroLine ? Icons.subway : Icons.route,
-                          color: hasMetroLine ? _metroRoute!.primaryLineColor : AppColors.safeGreenGlow,
-                          size: 14,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${routeDistanceKm.toStringAsFixed(1)} km',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          hasMetroLine ? 'Metro Line' : 'Road Route',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.8),
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-                // Floating Corridor Guard Badge
-                if (_geofenceEnabled)
-                  Positioned(
-                    top: 10,
-                    right: 10,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: AppColors.infoBlue.withValues(alpha: 0.9),
-                        borderRadius: BorderRadius.circular(10),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.infoBlue.withValues(alpha: 0.35),
-                            blurRadius: 6,
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.shield_rounded, size: 12, color: Colors.white),
-                          const SizedBox(width: 4),
-                          Text(
-                            '${_geofenceRadiusMeters}m Corridor',
-                            style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                if (_isReverseGeocoding || _isCalculatingRoute)
-                  Positioned(
-                    bottom: 10,
-                    right: 10,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.85),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const SizedBox(
-                            width: 12,
-                            height: 12,
-                            child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            _isCalculatingRoute ? 'Live routing...' : 'Resolving pin...',
-                            style: const TextStyle(color: Colors.white, fontSize: 10),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMetroRouteStatusCard(bool isDark) {
-    if (_metroRoute == null) return const SizedBox.shrink();
-
-    if (_metroRoute!.isAvailable) {
-      return Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: _metroRoute!.primaryLineColor.withValues(alpha: isDark ? 0.15 : 0.08),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: _metroRoute!.primaryLineColor.withValues(alpha: 0.4),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: _metroRoute!.primaryLineColor,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.subway, color: Colors.black, size: 16),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'METRO ROUTE AVAILABLE',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.8,
-                          color: _metroRoute!.primaryLineColor,
-                        ),
-                      ),
-                      Text(
-                        _metroRoute!.lineSummary,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '${_metroRoute!.totalStations} stops',
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 18),
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Board at',
-                        style: TextStyle(fontSize: 10, color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary),
-                      ),
-                      Text(
-                        _metroRoute!.originStation!.name,
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        '${_metroRoute!.firstMileKm} km from start',
-                        style: TextStyle(fontSize: 10, color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary),
-                      ),
-                    ],
-                  ),
-                ),
-                const Icon(Icons.arrow_forward, size: 14),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Deboard at',
-                        style: TextStyle(fontSize: 10, color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary),
-                      ),
-                      Text(
-                        _metroRoute!.destinationStation!.name,
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        '${_metroRoute!.lastMileKm} km to dest',
-                        style: TextStyle(fontSize: 10, color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.warningAmber.withValues(alpha: isDark ? 0.15 : 0.08),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.warningAmber.withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.warning_amber_rounded, color: AppColors.warningAmber, size: 20),
+              Container(
+                padding: const EdgeInsets.all(5),
+                decoration: BoxDecoration(
+                  color: accentColor.withValues(alpha: 0.18),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 14, color: accentColor),
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'No Direct Metro Route Available',
+                  title,
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 12.5,
                     fontWeight: FontWeight.bold,
-                    color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
+                    color: isDark ? Colors.white : const Color(0xFF1E2022),
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 6),
           Text(
-            _metroRoute!.unavailableReason ?? 'Destination is outside the Metro corridor radius.',
+            description,
             style: TextStyle(
-              fontSize: 11,
-              color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
+              fontSize: 10.5,
+              color: isDark ? AppColors.textSecondary : const Color(0xFF555555),
+              height: 1.25,
             ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              ElevatedButton.icon(
-                onPressed: () {
-                  setState(() {
-                    _selectedMode = TransportMode.cab;
-                  });
-                  _calculateActiveRoute();
-                },
-                icon: const Icon(Icons.local_taxi, size: 14),
-                label: const Text('Switch to Cab'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryViolet,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                ),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: () {
-                  setState(() {
-                    _selectedMode = TransportMode.auto;
-                  });
-                  _calculateActiveRoute();
-                },
-                icon: const Icon(Icons.electric_rickshaw, size: 14),
-                label: const Text('Switch to Auto'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
     );
   }
 
+  // =========================================================================
+  // DESTINATION SEARCH OVERLAY
+  // =========================================================================
 
-  Widget _buildTransportModeSelector(bool isDark) {
-    final distanceKm = _getEffectiveRouteDistanceKm();
-    final viableModes = _getViableModes(distanceKm);
-    final activeTiming = _calculateDynamicTiming(distanceKm: distanceKm, mode: _selectedMode);
+  Widget _buildSearchOverlay(bool isDark) {
+    return Container(
+      color: isDark ? AppColors.midnightDarkBackground : Colors.white,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Top Nav & Search Header
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 8, 16, 12),
+              decoration: BoxDecoration(
+                color: isDark ? AppColors.midnightDarkSurface : Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: () => setState(() => _isSearching = false),
+                      ),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'Where do you want to go?',
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+                  // Pickup Field
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isDark ? AppColors.midnightDarkSurfaceVariant : const Color(0xFFF5F5F5),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: const Color(0xFF00875A), width: 2.5),
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: _startController,
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                            decoration: const InputDecoration(
+                              hintText: 'Pickup point',
+                              border: InputBorder.none,
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.my_location, size: 18, color: Color(0xFF00875A)),
+                          onPressed: _fetchAndUseCurrentGps,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Destination Field
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isDark ? AppColors.midnightDarkSurfaceVariant : const Color(0xFFF5F5F5),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFFFC800), width: 1.5),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 10,
+                          height: 10,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Color(0xFFD32F2F),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: _destController,
+                            autofocus: true,
+                            onChanged: _onDestinationTextChanged,
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                            decoration: const InputDecoration(
+                              hintText: 'Search destination address...',
+                              border: InputBorder.none,
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                        if (_destController.text.isNotEmpty)
+                          IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              _destController.clear();
+                              setState(() => _dynamicSuggestions = const []);
+                            },
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Autocomplete Results or Recommended Destinations
+            Expanded(
+              child: _dynamicSuggestions.isNotEmpty
+                  ? ListView.separated(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      itemCount: _dynamicSuggestions.length,
+                      separatorBuilder: (context, index) => const Divider(height: 1, indent: 52),
+                      itemBuilder: (context, index) {
+                        final suggestion = _dynamicSuggestions[index];
+                        return ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.place_rounded, color: Color(0xFF00875A)),
+                          title: Text(
+                            suggestion.title,
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                          subtitle: Text(
+                            suggestion.subtitle,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: const Icon(Icons.north_west, size: 14, color: Colors.grey),
+                          onTap: () => _selectDestinationSuggestion(suggestion),
+                        );
+                      },
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      children: [
+                        const Text(
+                          'Recent & Recommended',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey),
+                        ),
+                        const SizedBox(height: 8),
+                        ..._recentDestinations.map((item) {
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.history_rounded, color: Colors.grey),
+                            title: Text(
+                              item.title,
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                            ),
+                            subtitle: Text(
+                              item.subtitle,
+                              style: const TextStyle(fontSize: 11.5, color: Colors.grey),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            onTap: () => _selectRecentDestination(item),
+                          );
+                        }),
+                      ],
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =========================================================================
+  // RIDE SETUP SHEET CONTENT (WHEN DESTINATION IS SELECTED)
+  // =========================================================================
+
+  Widget _buildRideSetupContent(bool isDark, double effectiveDistanceKm, ScrollController scrollController) {
+    final viableModes = _getViableModes(effectiveDistanceKm);
+    final activeTiming = _calculateDynamicTiming(distanceKm: effectiveDistanceKm, mode: _selectedMode);
+
+    return ListView(
+      controller: scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       children: [
+        // Drag Handle
+        Center(
+          child: Container(
+            margin: const EdgeInsets.only(top: 4, bottom: 12),
+            width: 40,
+            height: 4.5,
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white24 : Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+        ),
+
+        // Route Addresses Card with Edit Button
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isDark ? AppColors.midnightDarkSurfaceVariant : const Color(0xFFF7F8FA),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isDark ? AppColors.midnightDarkCardBorder : Colors.black.withValues(alpha: 0.05),
+            ),
+          ),
+          child: Row(
+            children: [
+              Column(
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0xFF00875A), width: 2.5),
+                      color: Colors.white,
+                    ),
+                  ),
+                  Container(width: 1.5, height: 26, color: Colors.grey.shade400),
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Color(0xFFD32F2F),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _startController.text,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: isDark ? Colors.white70 : Colors.black87,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      _destController.text,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              TextButton(
+                onPressed: () => setState(() => _isSearching = true),
+                child: const Text('Change', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF00875A))),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Vehicle Mode Selection Cards
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Row(
-              children: [
-                Text(
-                  'Transport Mode',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: (distanceKm > 45 ? AppColors.infoBlue : AppColors.safeGreen)
-                        .withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    distanceKm > 45
-                        ? 'Intercity (${distanceKm.toStringAsFixed(0)} km)'
-                        : (distanceKm > 12
-                            ? 'Regional (${distanceKm.toStringAsFixed(0)} km)'
-                            : 'Local (${distanceKm.toStringAsFixed(1)} km)'),
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      color: distanceKm > 45 ? AppColors.infoBlue : AppColors.safeGreen,
-                    ),
-                  ),
-                ),
-              ],
+            const Text(
+              'Select Escort Mode',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
             ),
             Text(
-              '${_selectedMode.label} • ~${activeTiming.totalMinutes} min',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: AppColors.primaryViolet,
-              ),
+              '${effectiveDistanceKm.toStringAsFixed(1)} km • ~${activeTiming.totalMinutes} min',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF00875A)),
             ),
           ],
         ),
         const SizedBox(height: 10),
+
+        // Horizontal Mode Cards
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
           child: Row(
             children: viableModes.map((mode) {
               final isSelected = _selectedMode == mode;
+              final timing = _calculateDynamicTiming(distanceKm: effectiveDistanceKm, mode: mode);
+
               return Padding(
-                padding: const EdgeInsets.only(right: 8.0),
-                child: FilterChip(
-                  selected: isSelected,
-                  label: Text(mode.label),
-                  avatar: Icon(
-                    mode.icon,
-                    size: 18,
-                    color: isSelected ? Colors.white : AppColors.primaryViolet,
-                  ),
-                  onSelected: (val) {
+                padding: const EdgeInsets.only(right: 10),
+                child: InkWell(
+                  onTap: () {
                     setState(() {
                       _selectedMode = mode;
                       final dist = _getEffectiveRouteDistanceKm();
@@ -1922,17 +2059,44 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
                     });
                     _calculateActiveRoute();
                   },
-                  selectedColor: AppColors.primaryViolet,
-                  labelStyle: TextStyle(
-                    color: isSelected
-                        ? Colors.white
-                        : (isDark ? AppColors.textPrimary : AppColors.lightTextPrimary),
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    side: BorderSide(
-                      color: isSelected ? AppColors.primaryViolet : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                  child: Container(
+                    width: 105,
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? const Color(0xFFFFC800).withValues(alpha: isDark ? 0.25 : 0.18)
+                          : (isDark ? AppColors.midnightDarkSurfaceVariant : const Color(0xFFF7F8FA)),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: isSelected ? const Color(0xFFFFC800) : Colors.transparent,
+                        width: 2.0,
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(
+                          mode.icon,
+                          size: 26,
+                          color: isSelected ? const Color(0xFFFFB800) : Colors.grey,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          mode.label,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: isDark ? Colors.white : Colors.black87,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '~${timing.totalMinutes}m',
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.grey),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -1940,29 +2104,62 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
             }).toList(),
           ),
         ),
-        if (distanceKm > 12) ...[
-          const SizedBox(height: 6),
-          Text(
-            distanceKm > 45
-                ? 'Walking and Auto are disabled because route distance (${distanceKm.toStringAsFixed(0)} km) exceeds realistic transit range.'
-                : 'Walking is disabled because distance (${distanceKm.toStringAsFixed(0)} km) exceeds pedestrian feasibility (max 12 km).',
-            style: TextStyle(
-              fontSize: 11,
-              color: isDark ? AppColors.textMuted : AppColors.lightTextSecondary,
-              fontStyle: FontStyle.italic,
-            ),
-          ),
+        const SizedBox(height: 14),
+
+        // Vehicle Registration Number Input (Cab, Auto, Bus)
+        if (_selectedMode == TransportMode.cab ||
+            _selectedMode == TransportMode.auto ||
+            _selectedMode == TransportMode.bus) ...[
+          _buildVehicleNumberInput(isDark),
+          const SizedBox(height: 14),
         ],
+
+        // Estimated Journey Time Card
+        _buildEstimatedTimeCard(isDark),
+        const SizedBox(height: 14),
+
+        // Adaptive Check-In Frequency Card
+        _buildAdaptiveCheckInCard(isDark),
+        const SizedBox(height: 14),
+
+        // Escort Guardians Selection for This Trip
+        _buildContactsNotificationPreview(isDark),
+        const SizedBox(height: 20),
+
+        // Modern Animated Swipe Slider
+        SwipeActionControl(
+          label: 'Swipe right to arm journey protection',
+          confirmedLabel: 'PROTECTED ESCORT ACTIVE',
+          sliderColor: const Color(0xFF00875A),
+          onConfirmed: () {
+            final waypoints = _getEffectiveRouteWaypoints();
+            widget.onStartJourney(
+              _startController.text,
+              _destController.text,
+              _selectedMode,
+              _vehicleController.text,
+              _durationMinutes,
+              _checkInInterval,
+              _selectedContactIds.toList(),
+              waypoints,
+            );
+          },
+        ),
+        const SizedBox(height: 24),
       ],
     );
   }
+
+  // =========================================================================
+  // JOURNEY SETUP COMPONENT CARDS (TIMING, CHECK-IN, GUARDIANS)
+  // =========================================================================
 
   Widget _buildVehicleNumberInput(bool isDark) {
     return TextField(
       controller: _vehicleController,
       decoration: InputDecoration(
         labelText: 'Vehicle / Registration Number',
-        prefixIcon: const Icon(Icons.badge, color: AppColors.primaryCobalt),
+        prefixIcon: const Icon(Icons.badge, color: Color(0xFF00875A)),
         hintText: 'e.g. DL 1Y B 4821',
         suffixIcon: IconButton(
           icon: const Icon(Icons.clear, size: 18),
@@ -1971,1091 +2168,249 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: AppColors.primaryCobalt, width: 2),
+          borderSide: const BorderSide(color: Color(0xFF00875A), width: 2),
         ),
       ),
     );
   }
 
-  /// Dynamic Estimated Journey Time Card with Quick Steppers & Detailed Info Dialog
   Widget _buildEstimatedTimeCard(bool isDark) {
     final distanceKm = _getEffectiveRouteDistanceKm();
     final timing = _calculateDynamicTiming(distanceKm: distanceKm, mode: _selectedMode);
 
     return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark ? AppColors.midnightDarkCardBorder : AppColors.lightCardBorder,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header: Title & Info Icon + Traffic Status Badge
-          Row(
-            children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    const Icon(Icons.schedule_rounded, color: AppColors.primaryCobalt, size: 20),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        'Estimated Journey Time',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    InkWell(
-                      onTap: () => _showEstimatedTimeInfoDialog(context, timing, distanceKm),
-                      borderRadius: BorderRadius.circular(12),
-                      child: const Padding(
-                        padding: EdgeInsets.all(2.0),
-                        child: Icon(Icons.info_outline, size: 16, color: AppColors.primaryCobalt),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: timing.traffic.badgeColor.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: timing.traffic.badgeColor.withValues(alpha: 0.35)),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(timing.traffic.icon, size: 12, color: timing.traffic.badgeColor),
-                      const SizedBox(width: 4),
-                      Flexible(
-                        child: Text(
-                          timing.traffic.statusLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: timing.traffic.badgeColor,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-
-          // Big, Clean Time Display & Expected Arrival
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        _formatDurationDisplay(_durationMinutes),
-                        style: const TextStyle(
-                          fontSize: 32,
-                          fontWeight: FontWeight.w900,
-                          color: AppColors.primaryCobalt,
-                          letterSpacing: -0.5,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        const Icon(Icons.flag_circle_rounded, size: 13, color: AppColors.safeGreen),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            'Expected Arrival: ${_formatExpectedArrival()}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-
-              // Manual Increase / Decrease Stepper Controls
-              Container(
-                decoration: BoxDecoration(
-                  color: isDark ? AppColors.midnightDarkSurfaceVariant : AppColors.lightSurfaceVariant,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: isDark ? AppColors.midnightDarkCardBorder : AppColors.lightCardBorder,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.remove_rounded, size: 20),
-                      tooltip: 'Decrease 5 mins',
-                      onPressed: () {
-                        setState(() {
-                          _durationMinutes = math.max(5, _durationMinutes - 5);
-                        });
-                      },
-                      color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                    ),
-                    Container(
-                      height: 20,
-                      width: 1,
-                      color: isDark ? Colors.white24 : Colors.black12,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.add_rounded, size: 20),
-                      tooltip: 'Increase 5 mins',
-                      onPressed: () {
-                        setState(() {
-                          _durationMinutes = math.min(1440, _durationMinutes + 5);
-                        });
-                      },
-                      color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-
-          // Dynamic transit timing metrics breakdown
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: isDark ? AppColors.midnightDarkSurfaceVariant : AppColors.lightSurfaceVariant,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isDark ? AppColors.midnightDarkCardBorder : AppColors.lightCardBorder,
-              ),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildTimingMetricItem('Route Distance', '${distanceKm.toStringAsFixed(1)} km', isDark),
-                Container(height: 24, width: 1, color: isDark ? Colors.white12 : Colors.black12),
-                _buildTimingMetricItem('Avg Speed', '${timing.averageSpeedKmh.toStringAsFixed(0)} km/h', isDark),
-                Container(height: 24, width: 1, color: isDark ? Colors.white12 : Colors.black12),
-                _buildTimingMetricItem(
-                  'Traffic Delay',
-                  timing.trafficDelayMinutes > 0 ? '+${timing.trafficDelayMinutes}m' : '0m',
-                  isDark,
-                  valueColor: timing.trafficDelayMinutes > 0 ? AppColors.warningAmber : null,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          // Quick Time Adjust Chips
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            child: Row(
-              children: [
-                _buildTimeStepperChip('-15m', -15, isDark),
-                const SizedBox(width: 6),
-                _buildTimeStepperChip('+15m', 15, isDark),
-                const SizedBox(width: 6),
-                _buildTimeStepperChip('+30m', 30, isDark),
-                const SizedBox(width: 6),
-                _buildTimeStepperChip('+1 Hour', 60, isDark),
-                const SizedBox(width: 6),
-                _buildTimeStepperChip('+3 Hours', 180, isDark),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTimingMetricItem(String label, String value, bool isDark, {Color? valueColor}) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
-            color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-            color: valueColor ?? (isDark ? AppColors.textPrimary : AppColors.lightTextPrimary),
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Displays comprehensive transit duration and traffic calculation breakdown dialog
-  void _showEstimatedTimeInfoDialog(BuildContext context, DynamicTimingPrediction timing, double distanceKm) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
-          children: [
-            Icon(Icons.schedule_rounded, color: AppColors.primaryCobalt, size: 24),
-            SizedBox(width: 10),
-            Text(
-              'Journey Duration Details',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'How is travel time calculated?',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primaryCobalt),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Duration is calculated using live route geometry, transit mode mechanics, and diurnal road traffic patterns.',
-              style: TextStyle(
-                fontSize: 12,
-                color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
-                height: 1.4,
-              ),
-            ),
-            const SizedBox(height: 12),
-            _buildDialogBullet(
-              'Route Distance',
-              '${distanceKm.toStringAsFixed(1)} km along the selected path.',
-              isDark,
-            ),
-            const SizedBox(height: 6),
-            _buildDialogBullet(
-              'Transit Speed',
-              '~${timing.averageSpeedKmh.toStringAsFixed(0)} km/h based on ${_selectedMode.label} characteristics.',
-              isDark,
-            ),
-            const SizedBox(height: 6),
-            _buildDialogBullet(
-              'Traffic & Congestion',
-              '${timing.traffic.statusLabel} (${timing.trafficDelayMinutes > 0 ? "+${timing.trafficDelayMinutes} mins delay" : "Free flow"}). ${timing.traffic.description}',
-              isDark,
-            ),
-            const SizedBox(height: 6),
-            _buildDialogBullet(
-              'Transit Model',
-              timing.modeRationale,
-              isDark,
-            ),
-          ],
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primaryCobalt,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Context-Aware Adaptive Check-In Frequency Card with Diurnal & Route Risk Intelligence
-  Widget _buildAdaptiveCheckInCard(bool isDark) {
-    final distanceKm = _getEffectiveRouteDistanceKm();
-    final localRec = _calculateCheckInRecommendation(mode: _selectedMode, distanceKm: distanceKm);
-    final prediction = _geminiPrediction;
-    final recommendedInterval = prediction?.recommendedIntervalMinutes ?? localRec.recommendedIntervalMinutes;
-    final safetyTier = prediction?.safetyTier ?? localRec.safetyTier;
-    final isAi = prediction?.isAiGenerated ?? false;
-
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark ? AppColors.midnightDarkCardBorder : AppColors.lightCardBorder,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header: Title & Info Icon + Frequency Pill
-          Row(
-            children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    const Icon(Icons.security_rounded, color: AppColors.safeGreen, size: 20),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        'Adaptive Check-In Frequency',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    InkWell(
-                      onTap: () => _showAdaptiveCheckInInfoDialog(context, prediction ?? localRec),
-                      borderRadius: BorderRadius.circular(12),
-                      child: const Padding(
-                        padding: EdgeInsets.all(2.0),
-                        child: Icon(Icons.info_outline, size: 16, color: AppColors.safeGreen),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppColors.safeGreen.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppColors.safeGreen.withValues(alpha: 0.4)),
-                ),
-                child: Text(
-                  'Every $_checkInInterval min',
-                  maxLines: 1,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.safeGreen,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-
-          // Clean Status Row with Recommended Badge
-          Row(
-            children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        color: localRec.tierColor,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        'Smart Safety: Recommended $safetyTier ($recommendedInterval min)',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (isAi) ...[
-                const SizedBox(width: 6),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryCobalt.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: AppColors.primaryCobalt.withValues(alpha: 0.3)),
-                  ),
-                  child: const Text(
-                    'Gemini AI',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.primaryCobalt,
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-          const SizedBox(height: 12),
-
-          // 3 Distinct Clean Presets (Capsules)
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildSimpleCheckInChip(
-                  label: 'High Alert',
-                  interval: 5,
-                  color: AppColors.warningAmber,
-                  isDark: isDark,
-                  isRecommended: recommendedInterval == 5,
-                ),
-                const SizedBox(width: 8),
-                _buildSimpleCheckInChip(
-                  label: 'Balanced',
-                  interval: 10,
-                  color: AppColors.safeGreen,
-                  isDark: isDark,
-                  isRecommended: recommendedInterval == 10,
-                ),
-                const SizedBox(width: 8),
-                _buildSimpleCheckInChip(
-                  label: 'Relaxed',
-                  interval: 20,
-                  color: AppColors.primaryCobalt,
-                  isDark: isDark,
-                  isRecommended: recommendedInterval == 20,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Displays intelligent adaptive check-in rationale, Gemini model insights, and escalation rules
-  void _showAdaptiveCheckInInfoDialog(BuildContext context, dynamic prediction) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final String tier = prediction is GeminiCheckInPrediction
-        ? prediction.safetyTier
-        : (prediction as DynamicCheckInRecommendation).safetyTier;
-    final int interval = prediction is GeminiCheckInPrediction
-        ? prediction.recommendedIntervalMinutes
-        : (prediction as DynamicCheckInRecommendation).recommendedIntervalMinutes;
-    final String rationale = prediction is GeminiCheckInPrediction
-        ? prediction.rationale
-        : (prediction as DynamicCheckInRecommendation).rationale;
-    final String crowd = prediction is GeminiCheckInPrediction
-        ? prediction.crowdContext
-        : (prediction as DynamicCheckInRecommendation).crowdContext;
-    final List<String> tips = prediction is GeminiCheckInPrediction
-        ? prediction.safetyTips
-        : const [];
-    final bool isAi = prediction is GeminiCheckInPrediction && prediction.isAiGenerated;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
-          children: [
-            Icon(Icons.security_rounded, color: AppColors.safeGreen, size: 24),
-            SizedBox(width: 10),
-            Text(
-              'Adaptive Check-In Protection',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              isAi
-                  ? 'Gemini Safety Intelligence Prediction'
-                  : 'Why is this check-in interval recommended?',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.safeGreen),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Check-in intervals adapt based on transit mode, environmental exposure, route lighting, and time of day.',
-              style: TextStyle(
-                fontSize: 12,
-                color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
-                height: 1.4,
-              ),
-            ),
-            const SizedBox(height: 12),
-            _buildDialogBullet(
-              'Recommended Level',
-              '$tier ($interval min) for $crowd.',
-              isDark,
-            ),
-            const SizedBox(height: 6),
-            _buildDialogBullet(
-              'Safety Analysis',
-              rationale,
-              isDark,
-            ),
-            if (tips.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              ...tips.map((t) => Padding(
-                    padding: const EdgeInsets.only(bottom: 6.0),
-                    child: _buildDialogBullet('Precaution', t, isDark),
-                  )),
-            ],
-            const SizedBox(height: 6),
-            _buildDialogBullet(
-              'Silent Verification',
-              'Check-in alerts prompt quietly. If unanswered within 45 seconds, your emergency guardians receive instant live telemetry.',
-              isDark,
-            ),
-          ],
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.safeGreen,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            child: const Text('Got It'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSimpleCheckInChip({
-    required String label,
-    required int interval,
-    required Color color,
-    required bool isDark,
-    bool isRecommended = false,
-  }) {
-    final isSelected = _checkInInterval == interval;
-    return Expanded(
-      child: InkWell(
-        onTap: () => setState(() => _checkInInterval = interval),
-        borderRadius: BorderRadius.circular(14),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-          decoration: BoxDecoration(
-            color: isSelected
-                ? color.withValues(alpha: isDark ? 0.22 : 0.12)
-                : (isDark ? AppColors.midnightDarkSurfaceVariant : AppColors.lightSurfaceVariant),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: isSelected
-                  ? color
-                  : (isDark ? AppColors.midnightDarkCardBorder : AppColors.lightCardBorder),
-              width: isSelected ? 1.8 : 1.0,
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (isRecommended)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 3),
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      'Recommended',
-                      style: TextStyle(
-                        fontSize: 7.5,
-                        fontWeight: FontWeight.w800,
-                        color: color,
-                        letterSpacing: 0.1,
-                      ),
-                    ),
-                  ),
-                )
-              else
-                const SizedBox(height: 12),
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: isSelected
-                        ? color
-                        : (isDark ? AppColors.textPrimary : AppColors.lightTextPrimary),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 2),
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  '$interval min',
-                  maxLines: 1,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: isSelected
-                        ? color
-                        : (isDark ? AppColors.textSecondary : AppColors.lightTextSecondary),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTimeStepperChip(String label, int deltaMinutes, bool isDark) {
-    return InkWell(
-      onTap: () {
-        setState(() {
-          final updated = (_durationMinutes + deltaMinutes).clamp(5, 1440);
-          _setSmartDuration(updated);
-        });
-      },
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-        decoration: BoxDecoration(
-          color: isDark ? AppColors.midnightDarkSurfaceVariant : AppColors.lightSurfaceVariant,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: isDark ? AppColors.midnightDarkCardBorder : AppColors.lightCardBorder,
-          ),
-        ),
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            label,
-            maxLines: 1,
-            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGeofenceCard(bool isDark) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: _geofenceEnabled
-              ? AppColors.infoBlue.withValues(alpha: isDark ? 0.45 : 0.3)
-              : (isDark ? AppColors.midnightDarkCardBorder : AppColors.lightCardBorder),
-        ),
-        boxShadow: _geofenceEnabled
-            ? [
-                BoxShadow(
-                  color: AppColors.infoBlue.withValues(alpha: isDark ? 0.15 : 0.08),
-                  blurRadius: 10,
-                  offset: const Offset(0, 3),
-                ),
-              ]
-            : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.infoBlue.withValues(alpha: _geofenceEnabled ? 0.2 : 0.08),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.shield_rounded,
-                  color: _geofenceEnabled ? AppColors.infoBlue : Colors.grey,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            'Corridor Geofence Protection',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
-                              color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        InkWell(
-                          onTap: () => _showGeofenceInfoDialog(context),
-                          borderRadius: BorderRadius.circular(12),
-                          child: const Padding(
-                            padding: EdgeInsets.all(2.0),
-                            child: Icon(Icons.info_outline, size: 16, color: AppColors.infoBlue),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _geofenceEnabled
-                          ? 'Active ${_geofenceRadiusMeters}m safety buffer. Detours trigger instant alert.'
-                          : 'Corridor tracking disabled. No off-route alerts.',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: _geofenceEnabled
-                            ? AppColors.infoBlue
-                            : (isDark ? AppColors.textSecondary : AppColors.lightTextSecondary),
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Switch.adaptive(
-                value: _geofenceEnabled,
-                activeTrackColor: AppColors.infoBlue,
-                onChanged: (val) => setState(() => _geofenceEnabled = val),
-              ),
-            ],
-          ),
-
-          // Interactive Sensitivity Level (when enabled)
-          if (_geofenceEnabled) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: isDark ? AppColors.midnightDarkSurfaceVariant : AppColors.lightSurfaceVariant,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Corridor Sensitivity / Width',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                        ),
-                      ),
-                      Text(
-                        '${_geofenceRadiusMeters}m Envelope',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.infoBlue,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      _buildSensitivityChip('Strict (150m)', 150, isDark),
-                      const SizedBox(width: 6),
-                      _buildSensitivityChip('Standard (300m)', 300, isDark),
-                      const SizedBox(width: 6),
-                      _buildSensitivityChip('Flexible (500m)', 500, isDark),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSensitivityChip(String label, int radius, bool isDark) {
-    final isSelected = _geofenceRadiusMeters == radius;
-    return Expanded(
-      child: InkWell(
-        onTap: () => setState(() => _geofenceRadiusMeters = radius),
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: isSelected
-                ? AppColors.infoBlue
-                : (isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isSelected
-                  ? AppColors.infoBlue
-                  : (isDark ? AppColors.midnightDarkCardBorder : AppColors.lightCardBorder),
-            ),
-          ),
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                color: isSelected ? Colors.white : (isDark ? AppColors.textPrimary : AppColors.lightTextPrimary),
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showGeofenceInfoDialog(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
-          children: [
-            Icon(Icons.shield_rounded, color: AppColors.infoBlue, size: 24),
-            SizedBox(width: 10),
-            Text(
-              'Corridor Geofence',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'What is Corridor Geofence Protection?',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.infoBlue),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Unlike a static circular geofence around a fixed address, Corridor Geofence creates a continuous dynamic safety envelope (a virtual tunnel) along your active travel route on the map.',
-              style: TextStyle(
-                fontSize: 12,
-                color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
-                height: 1.4,
-              ),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'How It Protects You:',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-            ),
-            const SizedBox(height: 6),
-            _buildDialogBullet(
-              'Detour Detection',
-              'If the vehicle makes an unauthorized turn into dark alleys or strays beyond the corridor envelope, SheMove flags an Off-Route alert.',
-              isDark,
-            ),
-            const SizedBox(height: 6),
-            _buildDialogBullet(
-              'Auto Escalation',
-              'A silent check-in prompt appears. If unanswered within 45s, emergency contacts receive live SOS telemetry and GPS breadcrumbs.',
-              isDark,
-            ),
-            const SizedBox(height: 6),
-            _buildDialogBullet(
-              'Custom Sensitivity',
-              'Strict (150m) for high-risk city night trips; Standard (300m) for normal streets; Flexible (500m) for highways with bypasses.',
-              isDark,
-            ),
-          ],
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.infoBlue,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            child: const Text('Got It'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDialogBullet(String title, String body, bool isDark) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.only(top: 4.0),
-          child: Icon(Icons.circle, size: 6, color: AppColors.infoBlue),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: RichText(
-            text: TextSpan(
-              style: TextStyle(
-                fontSize: 11,
-                color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
-                height: 1.35,
-              ),
-              children: [
-                TextSpan(
-                  text: '$title: ',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                  ),
-                ),
-                TextSpan(text: body),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildContactsNotificationPreview(bool isDark) {
-    final hasContacts = widget.contacts.isNotEmpty;
-    final noneSelected = _selectedContactIds.isEmpty;
-
-    return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isDark ? AppColors.midnightDarkSurface : AppColors.lightSurface,
-        borderRadius: BorderRadius.circular(20),
+        color: isDark ? AppColors.midnightDarkSurfaceVariant : const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: noneSelected
-              ? AppColors.warningAmber.withValues(alpha: isDark ? 0.45 : 0.3)
-              : AppColors.primaryViolet.withValues(alpha: isDark ? 0.35 : 0.22),
-          width: 1.2,
+          color: isDark ? AppColors.midnightDarkCardBorder : Colors.black.withValues(alpha: 0.05),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
-            blurRadius: 12,
-            offset: const Offset(0, 3),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 1. Header with Title, Count Pill, and Select All / Clear Button
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
+              const Row(
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(7),
-                    decoration: BoxDecoration(
-                      color: AppColors.primaryViolet.withValues(alpha: 0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.people_alt_rounded, color: AppColors.primaryViolet, size: 18),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Escort Guardians for Trip',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                    ),
-                  ),
+                  Icon(Icons.schedule_rounded, color: Color(0xFF00875A), size: 18),
+                  SizedBox(width: 8),
+                  Text('Estimated Journey Time', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
                 ],
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: (noneSelected ? AppColors.warningAmber : AppColors.primaryViolet)
-                      .withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: (noneSelected ? AppColors.warningAmber : AppColors.primaryViolet)
-                        .withValues(alpha: 0.3),
+                  color: timing.traffic.badgeColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  timing.traffic.statusLabel,
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: timing.traffic.badgeColor),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _formatDurationDisplay(_durationMinutes),
+                    style: const TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF00875A),
+                    ),
                   ),
+                  Text(
+                    'Expected Arrival: ${_formatExpectedArrival()}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
+                    ),
+                  ),
+                ],
+              ),
+              // Increase / Decrease Stepper
+              Container(
+                decoration: BoxDecoration(
+                  color: isDark ? AppColors.midnightDarkSurface : Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.remove_rounded, size: 18),
+                      onPressed: () => setState(() => _durationMinutes = math.max(5, _durationMinutes - 5)),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add_rounded, size: 18),
+                      onPressed: () => setState(() => _durationMinutes = math.min(1440, _durationMinutes + 5)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAdaptiveCheckInCard(bool isDark) {
+    final distanceKm = _getEffectiveRouteDistanceKm();
+    final localRec = _calculateCheckInRecommendation(mode: _selectedMode, distanceKm: distanceKm);
+    final prediction = _geminiPrediction;
+    final recommendedInterval = prediction?.recommendedIntervalMinutes ?? localRec.recommendedIntervalMinutes;
+    final isAi = prediction?.isAiGenerated ?? false;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.midnightDarkSurfaceVariant : const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isDark ? AppColors.midnightDarkCardBorder : Colors.black.withValues(alpha: 0.05),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.security_rounded, color: Color(0xFF00875A), size: 18),
+                  const SizedBox(width: 8),
+                  const Text('Check-In Frequency', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                  if (isAi) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00875A).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text('Gemini AI', style: TextStyle(fontSize: 8.5, fontWeight: FontWeight.bold, color: Color(0xFF00875A))),
+                    ),
+                  ],
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00875A).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Every $_checkInInterval min',
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF00875A)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // 3 Presets
+          Row(
+            children: [
+              _buildCheckInChip('High Alert (5m)', 5, AppColors.warningAmber, isDark, recommendedInterval == 5),
+              const SizedBox(width: 8),
+              _buildCheckInChip('Balanced (10m)', 10, const Color(0xFF00875A), isDark, recommendedInterval == 10),
+              const SizedBox(width: 8),
+              _buildCheckInChip('Relaxed (20m)', 20, AppColors.primaryCobalt, isDark, recommendedInterval == 20),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCheckInChip(String label, int interval, Color color, bool isDark, bool isRecommended) {
+    final isSelected = _checkInInterval == interval;
+
+    return Expanded(
+      child: InkWell(
+        onTap: () => setState(() => _checkInInterval = interval),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? color.withValues(alpha: isDark ? 0.25 : 0.15)
+                : (isDark ? AppColors.midnightDarkSurface : Colors.white),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected ? color : Colors.grey.shade300,
+              width: isSelected ? 1.8 : 1.0,
+            ),
+          ),
+          child: Column(
+            children: [
+              if (isRecommended)
+                Text(
+                  'RECOMMENDED',
+                  style: TextStyle(fontSize: 7.5, fontWeight: FontWeight.w800, color: color),
+                ),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.bold,
+                  color: isSelected ? color : (isDark ? Colors.white70 : Colors.black87),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContactsNotificationPreview(bool isDark) {
+    final hasContacts = widget.contacts.isNotEmpty;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.midnightDarkSurfaceVariant : const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isDark ? AppColors.midnightDarkCardBorder : Colors.black.withValues(alpha: 0.05),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.people_alt_rounded, color: Color(0xFF00875A), size: 18),
+                  SizedBox(width: 8),
+                  Text('Escort Guardians', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00875A).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   '${_selectedContactIds.length} of ${widget.contacts.length} Alerted',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: noneSelected ? AppColors.warningAmber : AppColors.primaryViolet,
-                  ),
+                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF00875A)),
                 ),
               ),
             ],
@@ -3063,285 +2418,79 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
           const SizedBox(height: 10),
 
           if (hasContacts) ...[
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Text(
-                    'Select circle members who will receive live trip telemetry and arrival notifications:',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
-                    ),
-                  ),
-                ),
-                if (widget.contacts.length > 1) ...[
-                  const SizedBox(width: 8),
-                  InkWell(
-                    onTap: () {
-                      setState(() {
-                        if (_selectedContactIds.isNotEmpty) {
-                          _selectedContactIds.clear();
-                        } else {
-                          _selectedContactIds = widget.contacts.map((c) => c.id).toSet();
-                        }
-                      });
-                    },
-                    borderRadius: BorderRadius.circular(8),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                      child: Text(
-                        _selectedContactIds.isNotEmpty ? 'Deselect All' : 'Select All',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.primaryViolet,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            const SizedBox(height: 12),
-
-            // Interactive Contact Selection Cards
             Column(
               children: widget.contacts.map((contact) {
                 final isSelected = _selectedContactIds.contains(contact.id);
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () {
-                        setState(() {
-                          if (isSelected) {
-                            _selectedContactIds.remove(contact.id);
-                          } else {
-                            _selectedContactIds.add(contact.id);
-                          }
-                        });
-                      },
-                      borderRadius: BorderRadius.circular(14),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? AppColors.primaryViolet.withValues(alpha: isDark ? 0.16 : 0.08)
-                              : (isDark
-                                  ? AppColors.midnightDarkSurfaceVariant
-                                  : AppColors.lightSurfaceVariant),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: isSelected
-                                ? AppColors.primaryViolet.withValues(alpha: 0.5)
-                                : (isDark
-                                    ? AppColors.midnightDarkCardBorder
-                                    : AppColors.lightCardBorder),
-                            width: isSelected ? 1.4 : 1.0,
-                          ),
+                  padding: const EdgeInsets.only(bottom: 6.0),
+                  child: InkWell(
+                    onTap: () {
+                      setState(() {
+                        if (isSelected) {
+                          _selectedContactIds.remove(contact.id);
+                        } else {
+                          _selectedContactIds.add(contact.id);
+                        }
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? const Color(0xFF00875A).withValues(alpha: isDark ? 0.2 : 0.08)
+                            : (isDark ? AppColors.midnightDarkSurface : Colors.white),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isSelected ? const Color(0xFF00875A) : Colors.grey.shade300,
                         ),
-                        child: Row(
-                          children: [
-                            // Initial Avatar with check badge
-                            Stack(
-                              clipBehavior: Clip.none,
+                      ),
+                      child: Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 14,
+                            backgroundColor: isSelected ? const Color(0xFF00875A) : Colors.grey.shade300,
+                            child: Text(
+                              contact.name.isNotEmpty ? contact.name[0].toUpperCase() : 'G',
+                              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                CircleAvatar(
-                                  radius: 18,
-                                  backgroundColor: isSelected
-                                      ? AppColors.primaryViolet
-                                      : (isDark ? Colors.grey.shade700 : Colors.grey.shade300),
-                                  child: Text(
-                                    contact.name.isNotEmpty ? contact.name[0].toUpperCase() : 'C',
-                                    style: TextStyle(
-                                      color: isSelected
-                                          ? Colors.white
-                                          : (isDark ? Colors.white70 : Colors.black87),
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
+                                Text(
+                                  contact.name,
+                                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                if (isSelected)
-                                  Positioned(
-                                    right: -2,
-                                    bottom: -2,
-                                    child: Container(
-                                      padding: const EdgeInsets.all(2),
-                                      decoration: const BoxDecoration(
-                                        color: AppColors.safeGreen,
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: const Icon(Icons.check, size: 9, color: Colors.white),
-                                    ),
-                                  ),
+                                Text(
+                                  contact.relationship,
+                                  style: const TextStyle(fontSize: 10.5, color: Colors.grey),
+                                ),
                               ],
                             ),
-                            const SizedBox(width: 12),
-
-                            // Name, Relationship, and Phone
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Flexible(
-                                        child: Text(
-                                          contact.name,
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.bold,
-                                            color: isSelected
-                                                ? (isDark ? AppColors.textPrimary : AppColors.lightTextPrimary)
-                                                : (isDark ? AppColors.textSecondary : AppColors.lightTextSecondary),
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: isSelected
-                                              ? AppColors.primaryViolet.withValues(alpha: 0.15)
-                                              : (isDark
-                                                  ? AppColors.midnightDarkSurface
-                                                  : AppColors.lightSurface),
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                        child: Text(
-                                          contact.relationship,
-                                          style: TextStyle(
-                                            fontSize: 9,
-                                            fontWeight: FontWeight.w600,
-                                            color: isSelected ? AppColors.primaryViolet : AppColors.textMuted,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Row(
-                                    children: [
-                                      Icon(
-                                        Icons.phone_rounded,
-                                        size: 11,
-                                        color: isDark ? AppColors.textMuted : AppColors.lightTextSecondary,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        contact.phone,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: isDark ? AppColors.textMuted : AppColors.lightTextSecondary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-
-                            // Tactile Selection Check Indicator
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 180),
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? AppColors.primaryViolet
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: isSelected
-                                      ? AppColors.primaryViolet
-                                      : (isDark ? Colors.white30 : Colors.black26),
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    isSelected ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
-                                    size: 14,
-                                    color: isSelected ? Colors.white : (isDark ? Colors.white54 : Colors.black45),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    isSelected ? 'Alerted' : 'Skip',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      color: isSelected ? Colors.white : (isDark ? Colors.white54 : Colors.black54),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
+                          ),
+                          Icon(
+                            isSelected ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
+                            color: isSelected ? const Color(0xFF00875A) : Colors.grey,
+                            size: 18,
+                          ),
+                        ],
                       ),
                     ),
                   ),
                 );
               }).toList(),
             ),
-
-            if (noneSelected) ...[
-              const SizedBox(height: 4),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppColors.warningAmber.withValues(alpha: isDark ? 0.15 : 0.08),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.warningAmber.withValues(alpha: 0.3)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.warning_amber_rounded, size: 16, color: AppColors.warningAmber),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Local Mode: No guardians selected. Journey will be logged on this device only.',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                          color: isDark ? AppColors.textPrimary : AppColors.lightTextPrimary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
           ] else ...[
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppColors.warningAmber.withValues(alpha: isDark ? 0.12 : 0.07),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.warningAmber.withValues(alpha: 0.25)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.person_add_disabled_rounded, color: AppColors.warningAmber, size: 20),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'No emergency contacts configured yet. Journeys are safer when trusted guardians receive live tracking links.',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
-                      ),
-                    ),
-                  ),
-
-                ],
+            Text(
+              'No emergency contacts configured. Tap contacts icon to add trusted guardians.',
+              style: TextStyle(
+                fontSize: 11.5,
+                color: isDark ? AppColors.textSecondary : AppColors.lightTextSecondary,
               ),
             ),
           ],
@@ -3349,4 +2498,29 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
       ),
     );
   }
+}
+
+/// Custom painter for the little downward pointing triangle on the "Pickup Point" badge
+class _TrianglePointerPainter extends CustomPainter {
+  final Color color;
+
+  _TrianglePointerPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    final path = Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width / 2, size.height)
+      ..lineTo(size.width, 0)
+      ..close();
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

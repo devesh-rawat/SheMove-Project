@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { forwardToBackend } from '@/lib/backend';
 import { policeStore } from '@/lib/store';
 
 export async function POST(req: NextRequest) {
+  const backendRes = await forwardToBackend(req, '/api/v1/police/dispatch');
+  if (backendRes) return backendRes;
+
   try {
     const body = await req.json();
+
     const { tripId, unitCallsign, officerInCharge, etaMinutes, notes } = body;
 
     if (!tripId) {

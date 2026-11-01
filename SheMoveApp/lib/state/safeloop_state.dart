@@ -1,11 +1,16 @@
+// SafeLoop State Manager - Production Real-time Telemetry & Safety State Engine
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
+import '../services/api_service.dart';
 import '../services/contacts_service.dart';
 import '../services/gemini_service.dart';
 import '../services/location_service.dart';
+import '../services/vibration_service.dart';
 
 enum SafeLoopScreen {
   onboarding,
@@ -42,6 +47,8 @@ class SafeLoopState extends ChangeNotifier {
   String? _locationStatusMessage;
   final LocationService _locationService;
   final ContactsService _contactsService;
+  final ApiService _apiService;
+  final VibrationService _vibrationService;
   StreamSubscription<Position>? _positionSubscription;
   StreamSubscription<CompassEvent>? _compassSubscription;
   int _lastReverseGeocodeMillis = 0;
@@ -57,6 +64,7 @@ class SafeLoopState extends ChangeNotifier {
   Journey? _lastCompletedJourney;
 
   Timer? _journeyTicker;
+  Timer? _heartbeatTimer;
   Timer? _escalationTicker;
   Timer? _checkInWindowTicker;
   int _checkInWindowSecondsRemaining = 60;
@@ -64,10 +72,132 @@ class SafeLoopState extends ChangeNotifier {
   SafeLoopState({
     LocationService? locationService,
     ContactsService? contactsService,
+    ApiService? apiService,
+    VibrationService? vibrationService,
   })  : _locationService = locationService ?? LocationService(),
-        _contactsService = contactsService ?? ContactsService() {
+        _contactsService = contactsService ?? ContactsService(),
+        _apiService = apiService ?? ApiService(),
+        _vibrationService = vibrationService ?? VibrationService() {
     _initDefaultData();
     initLocationTracking();
+    _loadSavedSession();
+  }
+
+  Future<void> _loadSavedSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final isLoggedIn = prefs.getBool('shemove_is_logged_in') ?? false;
+
+      if (isLoggedIn) {
+        final profileJson = prefs.getString('shemove_user_profile');
+        final explicitDark = prefs.getBool('shemove_explicit_dark_theme');
+        if (profileJson != null && profileJson.isNotEmpty) {
+          try {
+            final map = jsonDecode(profileJson) as Map<String, dynamic>;
+            _userProfile = UserProfile.fromJson(map).copyWith(
+              isSetupComplete: true,
+              isDarkMode: explicitDark ?? false,
+            );
+          } catch (_) {
+            _userProfile = _userProfile.copyWith(
+              isSetupComplete: true,
+              isDarkMode: explicitDark ?? false,
+            );
+          }
+        } else {
+          _userProfile = _userProfile.copyWith(
+            isSetupComplete: true,
+            isDarkMode: explicitDark ?? false,
+          );
+        }
+
+        final token = prefs.getString('shemove_auth_token');
+        if (token != null && token.isNotEmpty) {
+          _apiService.setAuthToken(token);
+        }
+
+        // Direct navigation to home screen because user is already logged in
+        _currentScreen = SafeLoopScreen.home;
+        _screenStack
+          ..clear()
+          ..add(SafeLoopScreen.home);
+        notifyListeners();
+        debugPrint('✅ [SafeLoopState] Logged-in session restored: ${_userProfile.name} (${_userProfile.phone})');
+      } else {
+        _currentScreen = SafeLoopScreen.onboarding;
+        _screenStack
+          ..clear()
+          ..add(SafeLoopScreen.onboarding);
+        notifyListeners();
+        debugPrint('ℹ️ [SafeLoopState] No active saved session. Showing onboarding.');
+      }
+    } catch (e) {
+      debugPrint('Error loading saved session: $e');
+    }
+
+    _apiService.updateCredentials(
+      phone: _userProfile.phone,
+      name: _userProfile.name,
+      safetyPin: _userProfile.safetyPin,
+      duressPin: _userProfile.duressPin,
+    );
+    await syncWithBackend();
+  }
+
+  Future<void> _saveSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('shemove_is_logged_in', true);
+      await prefs.setString('shemove_user_profile', jsonEncode(_userProfile.toJson()));
+      if (_apiService.authToken != null) {
+        await prefs.setString('shemove_auth_token', _apiService.authToken!);
+      }
+      debugPrint('💾 [SafeLoopState] Saved active session for ${_userProfile.name}');
+    } catch (e) {
+      debugPrint('Error saving session: $e');
+    }
+  }
+
+  Future<void> logout() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('shemove_is_logged_in');
+      await prefs.remove('shemove_user_profile');
+      await prefs.remove('shemove_auth_token');
+    } catch (e) {
+      debugPrint('Error clearing session on logout: $e');
+    }
+
+    _journeyTicker?.cancel();
+    _heartbeatTimer?.cancel();
+    _escalationTicker?.cancel();
+    _checkInWindowTicker?.cancel();
+
+    _apiService.setAuthToken(null);
+    _userProfile = const UserProfile(
+      name: '',
+      phone: '',
+      safetyPin: '1234',
+      duressPin: '9999',
+      isSetupComplete: false,
+    );
+    _contacts = const [];
+    _history = const [];
+    _events = const [];
+    _activeJourney = null;
+    _isCovertDistressActive = false;
+
+    _addSafetyEvent(
+      'User Logged Out',
+      'Active session ended from settings. User returned to onboarding.',
+      EventSeverity.info,
+    );
+
+    _screenStack
+      ..clear()
+      ..add(SafeLoopScreen.onboarding);
+    _currentScreen = SafeLoopScreen.onboarding;
+    notifyListeners();
   }
 
   void _initDefaultData() {
@@ -78,71 +208,89 @@ class SafeLoopState extends ChangeNotifier {
       duressPin: '9999',
       defaultCheckInMinutes: 10,
       adaptiveFrequencyEnabled: true,
-      isDarkMode: true,
-      isSetupComplete: false, // Starts with onboarding for demonstration
+      isDarkMode: false,
+      isSetupComplete: false,
     );
 
     _contacts = const [];
+    _history = const [];
+    _events = const [];
 
-    final now = DateTime.now().millisecondsSinceEpoch;
-    _history = [
-      Journey(
-        id: 'h1',
-        startAddress: 'Cyber City Metro Station, Gate 2',
-        destinationAddress: 'Palm Springs Condos, Sector 54',
-        transportMode: TransportMode.cab,
-        vehicleNumber: 'DL 1Y B 4821',
-        estimatedMinutes: 22,
-        startTimeMillis: now - 86400000 * 1,
-        progressPercent: 1.0,
-        status: JourneyStatus.completed,
-        notes: 'Arrived on time. 2 adaptive check-ins confirmed.',
-      ),
-      Journey(
-        id: 'h2',
-        startAddress: 'Tech Hub Tower C',
-        destinationAddress: 'Blueberry Cafe, Green Park',
-        transportMode: TransportMode.auto,
-        vehicleNumber: 'DL 1R Z 3310',
-        estimatedMinutes: 18,
-        startTimeMillis: now - 86400000 * 2,
-        progressPercent: 1.0,
-        status: JourneyStatus.completed,
-        notes: 'Safe arrival verified by emergency contacts.',
-      ),
-      Journey(
-        id: 'h3',
-        startAddress: 'Central Library',
-        destinationAddress: 'University South Campus',
-        transportMode: TransportMode.walking,
-        vehicleNumber: '',
-        estimatedMinutes: 15,
-        startTimeMillis: now - 86400000 * 4,
-        progressPercent: 1.0,
-        status: JourneyStatus.completed,
-        notes: 'Evening walk, companion check-in active.',
-      ),
-    ];
+    _currentScreen = SafeLoopScreen.onboarding;
+    _screenStack
+      ..clear()
+      ..add(SafeLoopScreen.onboarding);
+  }
 
-    _events = [
-      SafetyEvent(
-        id: 'ev0',
-        timestamp: now - 1000 * 60 * 30,
-        title: 'SheMove Initialized',
-        description: 'Background protection active. GPS telemetry synchronized.',
-        severity: EventSeverity.info,
-      ),
-    ];
+  /// Synchronize app state with real SheMoveBackend API endpoints
+  Future<void> syncWithBackend() async {
+    try {
+      _apiService.updateCredentials(
+        phone: _userProfile.phone,
+        name: _userProfile.name,
+        safetyPin: _userProfile.safetyPin,
+        duressPin: _userProfile.duressPin,
+      );
 
-    if (!_userProfile.isSetupComplete) {
-      _currentScreen = SafeLoopScreen.onboarding;
-      _screenStack
-        ..clear()
-        ..add(SafeLoopScreen.onboarding);
+      final isHealthy = await _apiService.checkHealth();
+      if (!isHealthy) {
+        debugPrint('⚠️ [SafeLoopState] Backend at ${_apiService.baseUrl} is unreachable.');
+        _isOnline = false;
+        notifyListeners();
+        return;
+      }
+
+      await _apiService.ensureAuthenticated();
+
+      if (_apiService.isAuthenticated) {
+        _isOnline = true;
+        // 2. Fetch real user profile from backend
+        final me = await _apiService.getMe();
+        if (me != null) {
+          _userProfile = me.copyWith(isSetupComplete: true);
+          _saveSession();
+        }
+
+        // 3. Fetch real trusted contacts from backend
+        final backendContacts = await _apiService.getContacts();
+        if (backendContacts.isNotEmpty) {
+          _contacts = backendContacts;
+        }
+
+        // 4. Fetch real journeys history from backend
+        final backendTrips = await _apiService.getJourneys();
+        if (backendTrips.isNotEmpty) {
+          _history = backendTrips;
+        }
+
+        // 5. Fetch real safety events from backend
+        final backendEvents = await _apiService.getEvents();
+        if (backendEvents.isNotEmpty) {
+          _events = backendEvents;
+        }
+
+        // 6. Check for active trip
+        final activeTrip = await _apiService.getActiveJourney();
+        if (activeTrip != null && activeTrip.status != JourneyStatus.completed) {
+          _activeJourney = activeTrip;
+          _startJourneySimulation();
+          _startHeartbeatTimer();
+        }
+
+        notifyListeners();
+      } else {
+        _isOnline = false;
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('SafeLoopState.syncWithBackend error: $e');
+      _isOnline = false;
+      notifyListeners();
     }
   }
 
   // Getters
+  ApiService get apiService => _apiService;
   SafeLoopScreen get currentScreen => _currentScreen;
   UserProfile get userProfile => _userProfile;
   Journey? get activeJourney => _activeJourney;
@@ -214,13 +362,18 @@ class SafeLoopState extends ChangeNotifier {
   Future<void> initLocationTracking() async {
     _startCompassStream();
     try {
-      final permission = await _locationService.checkPermission();
+      var permission = await _locationService.checkPermission();
+      if (!_locationService.isPermissionGranted(permission)) {
+        permission = await _locationService.requestPermission();
+      }
       if (_locationService.isPermissionGranted(permission)) {
         _hasLocationPermission = true;
         await _fetchCurrentGpsPosition();
         _startLocationStream();
       } else {
         _hasLocationPermission = false;
+        // Even without active stream permission, fetch cached/last-known position
+        await _fetchCurrentGpsPosition();
       }
       notifyListeners();
     } catch (e) {
@@ -434,6 +587,37 @@ class SafeLoopState extends ChangeNotifier {
       ..add(SafeLoopScreen.home);
     _currentScreen = SafeLoopScreen.home;
     notifyListeners();
+    _saveSession();
+
+    _apiService.updateCredentials(
+      name: _userProfile.name,
+      phone: _userProfile.phone,
+      safetyPin: _userProfile.safetyPin,
+      duressPin: _userProfile.duressPin,
+    );
+
+    // Register traveller on SheMoveBackend and sync contacts
+    _apiService.registerTraveller(
+      name: _userProfile.name,
+      phone: _userProfile.phone,
+      safetyPin: _userProfile.safetyPin,
+      duressPin: _userProfile.duressPin,
+    ).then((_) {
+      _saveSession();
+      if (initialContacts != null) {
+        for (final c in initialContacts) {
+          _apiService.createContact(c);
+        }
+      }
+      _apiService.getContacts().then((serverContacts) {
+        if (serverContacts.isNotEmpty) {
+          _contacts = serverContacts;
+          notifyListeners();
+        }
+      });
+    }).catchError((err) {
+      debugPrint('Error registering traveller on backend: $err');
+    });
   }
 
   // Start Journey
@@ -445,7 +629,7 @@ class SafeLoopState extends ChangeNotifier {
     required String vehicleNo,
     required int durationMinutes,
     required int intervalMinutes,
-    required bool geofence,
+    bool geofence = false,
     List<String>? selectedContactIds,
     List<LatLngPoint>? waypoints,
   }) {
@@ -463,9 +647,9 @@ class SafeLoopState extends ChangeNotifier {
 
     final newJourney = Journey(
       id: 'j_$now',
-      startAddress: start.trim().isNotEmpty ? start.trim() : 'Connaught Place Inner Circle',
+      startAddress: start.trim().isNotEmpty ? start.trim() : 'Saheed sukhdev college, GIRLS HOSTEL',
       destinationAddress:
-          targetDestination.trim().isNotEmpty ? targetDestination.trim() : 'Hauz Khas Village',
+          targetDestination.trim().isNotEmpty ? targetDestination.trim() : 'Pacific Mall NSP Pitampura',
       transportMode: mode,
       vehicleNumber: vehicleNo.trim(),
       estimatedMinutes: durationMinutes,
@@ -499,12 +683,95 @@ class SafeLoopState extends ChangeNotifier {
     );
 
     _startJourneySimulation();
+    _startHeartbeatTimer();
     _screenStack
       ..clear()
       ..add(SafeLoopScreen.home)
       ..add(SafeLoopScreen.activeJourney);
     _currentScreen = SafeLoopScreen.activeJourney;
     notifyListeners();
+
+    // Create real trip on backend for live telemetry and public tracking share link
+    _createBackendJourney(
+      startAddress: newJourney.startAddress,
+      destinationAddress: newJourney.destinationAddress,
+      mode: mode,
+      vehicleNo: vehicleNo.trim(),
+      durationMinutes: durationMinutes,
+      intervalMinutes: intervalMinutes,
+      contactIds: selectedContactIds,
+      waypoints: waypoints,
+    );
+  }
+
+  Future<void> _createBackendJourney({
+    required String startAddress,
+    required String destinationAddress,
+    required TransportMode mode,
+    required String vehicleNo,
+    required int durationMinutes,
+    required int intervalMinutes,
+    List<String>? contactIds,
+    List<LatLngPoint>? waypoints,
+  }) async {
+    try {
+      final startCoord = (waypoints != null && waypoints.isNotEmpty)
+          ? waypoints.first
+          : _currentLocation;
+      final destCoord = (waypoints != null && waypoints.length >= 2)
+          ? waypoints.last
+          : const LatLngPoint(latitude: 28.6989, longitude: 77.1517);
+
+      final result = await _apiService.startJourney(
+        startAddress: startAddress,
+        destinationAddress: destinationAddress,
+        mode: mode,
+        vehicleNumber: vehicleNo,
+        estimatedMinutes: durationMinutes,
+        checkinIntervalMinutes: intervalMinutes,
+        startLat: startCoord.latitude,
+        startLng: startCoord.longitude,
+        destLat: destCoord.latitude,
+        destLng: destCoord.longitude,
+        contactIds: contactIds,
+        waypoints: waypoints,
+        speedKmh: _currentSpeedKmh,
+        heading: _currentHeading,
+      );
+
+      if (result != null && result['trip'] is Map<String, dynamic>) {
+        final tripData = result['trip'] as Map<String, dynamic>;
+        final tripId = tripData['id'] as String?;
+        final token = tripData['share_token'] as String?;
+        if (tripId != null && _activeJourney != null) {
+          _activeJourney = _activeJourney!.copyWith(
+            id: tripId,
+            shareToken: token,
+          );
+          notifyListeners();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error syncing journey to backend: $e');
+    }
+  }
+
+  void _startHeartbeatTimer() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (_activeJourney == null || _activeJourney!.status != JourneyStatus.active) {
+        _heartbeatTimer?.cancel();
+        return;
+      }
+      _apiService.sendHeartbeat(
+        _activeJourney!.id,
+        lat: _currentLocation.latitude,
+        lng: _currentLocation.longitude,
+        speedKmh: _currentSpeedKmh,
+        heading: _currentHeading,
+        batteryPct: 80,
+      );
+    });
   }
 
   void _startJourneySimulation() {
@@ -612,12 +879,21 @@ class SafeLoopState extends ChangeNotifier {
       EventSeverity.info,
     );
     notifyListeners();
+
+    _apiService.extendJourney(
+      current.id,
+      deltaMinutes,
+      pin: _userProfile.safetyPin,
+    );
   }
 
   void triggerCheckInDue() {
     if (_activeJourney == null) return;
     _activeJourney = _activeJourney!.copyWith(status: JourneyStatus.checkInDue);
     _checkInWindowSecondsRemaining = 60; // 1-minute window to respond
+
+    // Vibrate device with double-pulse check-in alert
+    _vibrationService.vibrateCheckInAlert();
 
     _addSafetyEvent(
       'Safety Check-In Due',
@@ -628,6 +904,9 @@ class SafeLoopState extends ChangeNotifier {
       _screenStack.add(SafeLoopScreen.safetyCheckIn);
     }
     _currentScreen = SafeLoopScreen.safetyCheckIn;
+
+    // Notify backend monitor that checkin is due
+    _apiService.triggerCheckinDue(_activeJourney!.id);
 
     // Start 1-minute check-in countdown ticker. If not answered within 60s, escalate!
     _checkInWindowTicker?.cancel();
@@ -661,7 +940,11 @@ class SafeLoopState extends ChangeNotifier {
 
   void confirmSafeFromCheckIn({bool verifiedWithDuress = false}) {
     _checkInWindowTicker?.cancel();
+    _vibrationService.vibrateSafetyConfirmed();
     if (_activeJourney == null) return;
+
+    final tripId = _activeJourney!.id;
+    final pinUsed = verifiedWithDuress ? _userProfile.duressPin : _userProfile.safetyPin;
 
     if (verifiedWithDuress) {
       _isCovertDistressActive = true;
@@ -689,6 +972,13 @@ class SafeLoopState extends ChangeNotifier {
       _startJourneySimulation();
     }
     notifyListeners();
+
+    // Send check-in response to backend (handles duress covert alert automatically)
+    _apiService.respondCheckin(
+      tripId,
+      response: 'SAFE',
+      pin: pinUsed,
+    );
   }
 
   void handleCheckInNeedHelp() {
@@ -700,6 +990,9 @@ class SafeLoopState extends ChangeNotifier {
     if (_activeJourney == null) return;
     _activeJourney = _activeJourney!.copyWith(status: JourneyStatus.escalating);
     _escalationSecondsRemaining = 45;
+
+    // Start repeating urgent vibration pulse alerting missed check-in
+    _vibrationService.startEscalationAlertPulse();
 
     _addSafetyEvent(
       'Check-In Missed: Escalation Initiated',
@@ -751,17 +1044,29 @@ class SafeLoopState extends ChangeNotifier {
     triggerFullEmergency(reason);
   }
 
-  void triggerFullEmergency([String reason = 'Manual SOS Activated']) {
+  void triggerFullEmergency([String reason = 'Manual SOS Activated']) async {
     _journeyTicker?.cancel();
     _escalationTicker?.cancel();
     _checkInWindowTicker?.cancel();
+    _vibrationService.vibrateEmergencySos();
+
+    // Acquire freshest live GPS coordinates at the exact moment of emergency
+    try {
+      final fresh = await _locationService.getCurrentLocation(requestIfDenied: true);
+      if (fresh.isLive) {
+        _currentLocation = fresh.point;
+        _isLiveGpsActive = true;
+      }
+    } catch (e) {
+      debugPrint('SafeLoopState: Error acquiring fresh GPS for SOS: $e');
+    }
 
     final now = DateTime.now().millisecondsSinceEpoch;
     _activeJourney = (_activeJourney ??
             Journey(
               id: 'j_emergency_$now',
-              startAddress: 'Current Location',
-              destinationAddress: 'Emergency Response',
+              startAddress: _currentLocation.address,
+              destinationAddress: 'Emergency Services Response',
               transportMode: TransportMode.walking,
               startTimeMillis: now,
               status: JourneyStatus.emergency,
@@ -787,6 +1092,7 @@ class SafeLoopState extends ChangeNotifier {
       'CRITICAL EMERGENCY ALERT',
       '$reason. Live GPS coordinates and audio telemetry broadcasted.',
       EventSeverity.critical,
+      _currentLocation.address,
     );
 
     _screenStack.remove(SafeLoopScreen.safetyCheckIn);
@@ -796,32 +1102,52 @@ class SafeLoopState extends ChangeNotifier {
     }
     _currentScreen = SafeLoopScreen.emergencyActive;
     notifyListeners();
+
+    // Trigger critical SOS on backend with exact real GPS location
+    if (_activeJourney != null) {
+      _apiService.triggerSos(
+        _activeJourney!.id,
+        reason: reason,
+        pin: _userProfile.safetyPin,
+        lat: _currentLocation.latitude,
+        lng: _currentLocation.longitude,
+        accuracyM: 5.0,
+        batteryPct: 85,
+        address: _currentLocation.address,
+      );
+    }
   }
 
   bool disarmEmergency(String pinEntered) {
+    final tripId = _activeJourney?.id;
+
     if (pinEntered == _userProfile.safetyPin) {
       _escalationTicker?.cancel();
-      _screenStack.remove(SafeLoopScreen.emergencyActive);
+      _vibrationService.vibrateSafetyConfirmed();
+      _screenStack
+        ..clear()
+        ..add(SafeLoopScreen.home);
+      _currentScreen = SafeLoopScreen.home;
+
       if (_activeJourney != null) {
         _activeJourney = _activeJourney!.copyWith(status: JourneyStatus.active);
         _checkInSecondsRemaining = _activeJourney!.checkInIntervalMinutes * 60;
         _startJourneySimulation();
-        _currentScreen = SafeLoopScreen.activeJourney;
-      } else {
-        _activeJourney = null;
-        _screenStack
-          ..clear()
-          ..add(SafeLoopScreen.home);
-        _currentScreen = SafeLoopScreen.home;
       }
+
       _isCovertDistressActive = false;
       _addSafetyEvent(
-        'Emergency Disarmed',
-        'User successfully disarmed alert with security PIN.',
+        'Emergency Disarmed with PIN',
+        'User authenticated with Security PIN. Journey returned to safe status.',
         EventSeverity.success,
       );
-      _toastMessage = 'Emergency successfully disarmed';
+      _toastMessage = 'Emergency disarmed — Journey safe';
       notifyListeners();
+
+      // Notify backend to disarm emergency and restore safe status on Police CAD
+      if (tripId != null && tripId.isNotEmpty) {
+        _apiService.disarmEmergency(tripId, pin: pinEntered);
+      }
       return true;
     } else if (pinEntered == _userProfile.duressPin) {
       _toastMessage = 'Alert disarmed';
@@ -831,9 +1157,15 @@ class SafeLoopState extends ChangeNotifier {
         'Duress PIN entered on emergency disarm screen.',
         EventSeverity.critical,
       );
-      _screenStack.remove(SafeLoopScreen.emergencyActive);
-      _currentScreen = SafeLoopScreen.activeJourney;
+      _screenStack
+        ..clear()
+        ..add(SafeLoopScreen.home);
+      _currentScreen = SafeLoopScreen.home;
       notifyListeners();
+
+      if (tripId != null && tripId.isNotEmpty) {
+        _apiService.disarmEmergency(tripId, pin: pinEntered);
+      }
       return true;
     }
     return false;
@@ -841,10 +1173,13 @@ class SafeLoopState extends ChangeNotifier {
 
   void completeActiveJourney() {
     _journeyTicker?.cancel();
+    _heartbeatTimer?.cancel();
     _escalationTicker?.cancel();
     _checkInWindowTicker?.cancel();
+    _vibrationService.stopVibration();
     if (_activeJourney == null) return;
 
+    final tripId = _activeJourney!.id;
     final completed = _activeJourney!.copyWith(
       status: JourneyStatus.completed,
       progressPercent: 1.0,
@@ -873,9 +1208,28 @@ class SafeLoopState extends ChangeNotifier {
       ..add(SafeLoopScreen.journeyCompleted);
     _currentScreen = SafeLoopScreen.journeyCompleted;
     notifyListeners();
+
+    // Notify backend of journey completion and refresh server-verified history
+    _apiService.completeJourney(tripId, confirmedSafe: true).then((_) {
+      _apiService.getJourneys().then((trips) {
+        if (trips.isNotEmpty) {
+          _history = trips;
+          notifyListeners();
+        }
+      });
+      _apiService.getEvents().then((evts) {
+        if (evts.isNotEmpty) {
+          _events = evts;
+          notifyListeners();
+        }
+      });
+    }).catchError((err) {
+      debugPrint('Error completing journey on backend: $err');
+    });
   }
 
   void exitJourneyToHome() {
+    _vibrationService.stopVibration();
     _activeJourney = null;
     _isCovertDistressActive = false;
     _contacts = _contacts
@@ -905,6 +1259,16 @@ class SafeLoopState extends ChangeNotifier {
       EventSeverity.info,
     );
     notifyListeners();
+
+    // Persist real contact on SheMoveBackend
+    _apiService.createContact(newC).then((created) {
+      if (created != null) {
+        _contacts = _contacts.map((c) => c.id == newC.id ? created : c).toList();
+        notifyListeners();
+      }
+    }).catchError((err) {
+      debugPrint('Error creating contact on backend: $err');
+    });
   }
 
   void removeContact(String id) {
@@ -921,6 +1285,12 @@ class SafeLoopState extends ChangeNotifier {
       );
     }
     notifyListeners();
+
+    // Delete contact on SheMoveBackend
+    _apiService.deleteContact(id).catchError((err) {
+      debugPrint('Error deleting contact on backend: $err');
+      return false;
+    });
   }
 
   void setPrimaryContact(String id) {
@@ -930,15 +1300,45 @@ class SafeLoopState extends ChangeNotifier {
 
   void updateProfile(UserProfile profile) {
     _userProfile = profile;
+    _apiService.updateCredentials(
+      name: profile.name,
+      phone: profile.phone,
+      safetyPin: profile.safetyPin,
+      duressPin: profile.duressPin,
+    );
     if (profile.geminiApiKey.isNotEmpty) {
       GeminiSafetyService.setApiKey(profile.geminiApiKey);
     }
     notifyListeners();
+    _saveSession();
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setBool('shemove_explicit_dark_theme', profile.isDarkMode);
+    }).catchError((_) {});
+
+    _apiService.updateMe(profile.toJson()).catchError((err) {
+      debugPrint('Error updating profile on backend: $err');
+      return null;
+    });
+  }
+
+  void updateBackendUrl(String newUrl) {
+    _apiService.setBaseUrl(newUrl);
+    syncWithBackend();
+    _addSafetyEvent(
+      'Backend URL Updated',
+      'Active API endpoint updated to $newUrl',
+      EventSeverity.info,
+    );
+    notifyListeners();
   }
 
   void toggleTheme() {
-    _userProfile = _userProfile.copyWith(isDarkMode: !_userProfile.isDarkMode);
+    final nextDark = !_userProfile.isDarkMode;
+    _userProfile = _userProfile.copyWith(isDarkMode: nextDark);
     notifyListeners();
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setBool('shemove_explicit_dark_theme', nextDark);
+    }).catchError((_) {});
   }
 
   void toggleOffline([bool? offline]) {
@@ -965,6 +1365,52 @@ class SafeLoopState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void showToast(String msg) {
+    _toastMessage = msg;
+    notifyListeners();
+  }
+
+  int _lastSimHeartbeatMillis = 0;
+
+  /// Updates vehicle coordinates, speed, and heading during simulation mode
+  /// and streams heartbeat telemetry to the backend so Police CAD and Guardians see live progress.
+  void updateSimulatedLocation(
+    double lat,
+    double lng,
+    double speedKmh,
+    double heading, {
+    double? progressPercent,
+  }) {
+    _currentLocation = LatLngPoint(
+      latitude: lat,
+      longitude: lng,
+      address: _currentLocation.address,
+    );
+    _currentHeading = heading;
+    _currentSpeedKmh = speedKmh;
+
+    if (_activeJourney != null && progressPercent != null) {
+      _activeJourney = _activeJourney!.copyWith(progressPercent: progressPercent);
+    }
+    notifyListeners();
+
+    // Stream heartbeat to backend every ~2.5s during simulation
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastSimHeartbeatMillis >= 2500) {
+      _lastSimHeartbeatMillis = now;
+      if (_activeJourney != null && _activeJourney!.status == JourneyStatus.active) {
+        _apiService.sendHeartbeat(
+          _activeJourney!.id,
+          lat: lat,
+          lng: lng,
+          speedKmh: speedKmh,
+          heading: heading,
+          batteryPct: 80,
+        );
+      }
+    }
+  }
+
   void _addSafetyEvent(
     String title,
     String desc,
@@ -983,23 +1429,34 @@ class SafeLoopState extends ChangeNotifier {
     _events = [event, ..._events];
   }
 
-  // Demo Scenarios Handler
+  // Demo Scenarios Handler directly connected to the backend API
   void runDemoScenario(String scenarioId) {
     _showScenarioPicker = false;
+    final activeTripId = _activeJourney?.id;
+
     switch (scenarioId) {
       case 'normal_journey':
-        startJourney(
-          start: 'Connaught Place, Radial 3',
-          destination: 'Hauz Khas Village',
-          mode: TransportMode.cab,
-          vehicleNo: 'DL 1Y B 9904',
-          durationMinutes: 25,
-          intervalMinutes: 8,
-          geofence: true,
-        );
+        if (_activeJourney != null && _activeJourney!.status == JourneyStatus.active) {
+          _apiService.simulateDemo('live', tripId: activeTripId);
+          showToast('Live journey resumed with backend sync');
+        } else {
+          startJourney(
+            start: 'Connaught Place, Radial 3',
+            destination: 'Hauz Khas Village',
+            mode: TransportMode.cab,
+            vehicleNo: 'DL 1Y B 9904',
+            durationMinutes: 25,
+            intervalMinutes: 8,
+            geofence: true,
+          );
+          showToast('Starting protected journey with backend sync');
+        }
         break;
+
       case 'trigger_checkin':
-        if (_activeJourney == null || _activeJourney!.status == JourneyStatus.emergency || _activeJourney!.status == JourneyStatus.completed) {
+        if (_activeJourney == null ||
+            _activeJourney!.status == JourneyStatus.emergency ||
+            _activeJourney!.status == JourneyStatus.completed) {
           startJourney(
             start: 'Cyber Hub Gate 1',
             destination: 'Golf Course Road',
@@ -1010,10 +1467,17 @@ class SafeLoopState extends ChangeNotifier {
             geofence: true,
           );
         }
+        if (activeTripId != null) {
+          _apiService.simulateDemo('trigger_checkin', tripId: activeTripId);
+        }
         triggerCheckInDue();
+        showToast('Safety check-in triggered on backend & device');
         break;
+
       case 'missed_checkin':
-        if (_activeJourney == null || _activeJourney!.status == JourneyStatus.emergency || _activeJourney!.status == JourneyStatus.completed) {
+        if (_activeJourney == null ||
+            _activeJourney!.status == JourneyStatus.emergency ||
+            _activeJourney!.status == JourneyStatus.completed) {
           startJourney(
             start: 'Sector 18 Metro',
             destination: 'Botanical Garden',
@@ -1024,10 +1488,15 @@ class SafeLoopState extends ChangeNotifier {
             geofence: true,
           );
         }
+        _apiService.simulateDemo('missed_checkin', tripId: _activeJourney?.id);
         startEscalationWarning();
+        showToast('Simulating missed check-in alert on backend');
         break;
+
       case 'test_duress_pin':
-        if (_activeJourney == null || _activeJourney!.status == JourneyStatus.emergency || _activeJourney!.status == JourneyStatus.completed) {
+        if (_activeJourney == null ||
+            _activeJourney!.status == JourneyStatus.emergency ||
+            _activeJourney!.status == JourneyStatus.completed) {
           startJourney(
             start: 'Aerocity Hospitality Dist',
             destination: 'Vasant Vihar',
@@ -1039,12 +1508,19 @@ class SafeLoopState extends ChangeNotifier {
           );
         }
         triggerCheckInDue();
+        showToast('Duress test: Enter PIN 9999 to alert contacts silently');
         break;
+
       case 'critical_sos':
+        _apiService.simulateDemo('sos', tripId: activeTripId);
         triggerFullEmergency('One-Touch SOS Emergency Button Held for 3s');
+        showToast('Instant Emergency SOS dispatched to Police & Guardians');
         break;
+
       case 'safe_arrival':
-        if (_activeJourney == null || _activeJourney!.status == JourneyStatus.emergency || _activeJourney!.status == JourneyStatus.completed) {
+        if (_activeJourney == null ||
+            _activeJourney!.status == JourneyStatus.emergency ||
+            _activeJourney!.status == JourneyStatus.completed) {
           startJourney(
             start: 'South Extension Part II',
             destination: 'Defence Colony',
@@ -1055,10 +1531,46 @@ class SafeLoopState extends ChangeNotifier {
             geofence: true,
           );
         }
+        _apiService.simulateDemo('complete_trip', tripId: _activeJourney?.id);
         completeActiveJourney();
+        showToast('Safe arrival recorded on backend & notified guardians');
         break;
+
+      case 'route_deviation':
+        if (_activeJourney != null) {
+          _apiService.simulateDemo('route_deviation', tripId: activeTripId);
+          _addSafetyEvent(
+            'Route Deviation Detected',
+            'Vehicle deviated >500m from planned corridor. Police CAD alerted.',
+            EventSeverity.warning,
+          );
+          showToast('Route deviation alert dispatched to backend');
+        } else {
+          showToast('Start an active journey first to simulate route deviation');
+        }
+        break;
+
+      case 'kill_heartbeat':
+        if (_activeJourney != null) {
+          _apiService.simulateDemo('kill_heartbeat', tripId: activeTripId);
+          _addSafetyEvent(
+            'Heartbeat Signal Lost',
+            'No telemetry received from device. Police CAD monitoring timeout.',
+            EventSeverity.warning,
+          );
+          showToast('Phone unreachable simulated on backend');
+        } else {
+          showToast('Start an active journey first to simulate signal loss');
+        }
+        break;
+
       case 'toggle_offline':
         toggleOffline(!_isOnline);
+        showToast(
+          _isOnline
+              ? 'Switched to offline encrypted SMS mode'
+              : 'Reconnected to live cloud sync',
+        );
         break;
     }
     notifyListeners();
@@ -1066,7 +1578,9 @@ class SafeLoopState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _vibrationService.stopVibration();
     _journeyTicker?.cancel();
+    _heartbeatTimer?.cancel();
     _escalationTicker?.cancel();
     _checkInWindowTicker?.cancel();
     _positionSubscription?.cancel();

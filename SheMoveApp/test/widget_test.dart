@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shemoveapp/main.dart';
 import 'package:shemoveapp/models/models.dart';
 import 'package:shemoveapp/state/safeloop_controller.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   group('SafeLoop Models & Controller Tests', () {
     test('Initial controller state is correct', () {
       final controller = SafeLoopController();
@@ -12,8 +17,8 @@ void main() {
       expect(controller.userProfile.isSetupComplete, false);
       expect(controller.currentScreen, SafeLoopScreen.onboarding);
       expect(controller.contacts.length, 0);
-      expect(controller.history.length, 3);
-      expect(controller.events.isNotEmpty, true);
+      expect(controller.history.length, 0);
+      expect(controller.events.isEmpty, true);
       expect(controller.isOnline, true);
       expect(controller.isCovertDistressActive, false);
       controller.dispose();

@@ -18,9 +18,9 @@ class LocationResult {
 
 class LocationService {
   static const LatLngPoint defaultFallbackLocation = LatLngPoint(
-    latitude: 28.4595,
-    longitude: 77.0266,
-    address: 'MG Road, Sector 28, Gurugram',
+    latitude: 28.6139,
+    longitude: 77.2090,
+    address: 'Current Location (Acquiring GPS Signal...)',
   );
 
   final Geocoding? geocoding;
@@ -77,10 +77,23 @@ class LocationService {
   }
 
   /// Fetch the current single position and reverse-geocode to a readable address.
-  Future<LocationResult> getCurrentLocation({bool requestIfDenied = false}) async {
+  /// Checks cached last-known position immediately so alerts/signal loss are never delayed.
+  Future<LocationResult> getCurrentLocation({bool requestIfDenied = true}) async {
     try {
       final serviceEnabled = await isLocationServiceEnabled();
       if (!serviceEnabled) {
+        final lastKnown = await Geolocator.getLastKnownPosition();
+        if (lastKnown != null) {
+          final address = await reverseGeocode(lastKnown.latitude, lastKnown.longitude);
+          return LocationResult(
+            point: LatLngPoint(
+              latitude: lastKnown.latitude,
+              longitude: lastKnown.longitude,
+              address: address,
+            ),
+            isLive: true,
+          );
+        }
         return const LocationResult(
           point: defaultFallbackLocation,
           isLive: false,
@@ -109,23 +122,40 @@ class LocationService {
         );
       }
 
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 12),
-        ),
-      );
+      // Check last known position first (fastest fallback if signal drops or indoors)
+      Position? position = await Geolocator.getLastKnownPosition();
 
-      final address = await reverseGeocode(position.latitude, position.longitude);
-      final point = LatLngPoint(
-        latitude: position.latitude,
-        longitude: position.longitude,
-        address: address,
-      );
+      // Acquire fresh high-accuracy position
+      try {
+        final fresh = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 8),
+          ),
+        );
+        position = fresh;
+      } catch (e) {
+        debugPrint('LocationService: Fresh GPS timeout, using lastKnown: $e');
+      }
 
-      return LocationResult(
-        point: point,
-        isLive: true,
+      if (position != null) {
+        final address = await reverseGeocode(position.latitude, position.longitude);
+        final point = LatLngPoint(
+          latitude: position.latitude,
+          longitude: position.longitude,
+          address: address,
+        );
+
+        return LocationResult(
+          point: point,
+          isLive: true,
+        );
+      }
+
+      return const LocationResult(
+        point: defaultFallbackLocation,
+        isLive: false,
+        error: 'Unable to acquire satellite lock.',
       );
     } catch (e) {
       debugPrint('LocationService: error fetching current location: $e');

@@ -114,6 +114,8 @@ export interface Alert {
     accuracy_m: number;
     speed_kmh: number;
   };
+  is_simulation?: boolean;
+  source?: string;
 }
 
 export interface Trip {
@@ -121,6 +123,8 @@ export interface Trip {
   traveller_id: string;
   traveller_name: string;
   traveller_phone: string;
+  is_simulation?: boolean;
+  source?: string;
   status: TripStatus;
   started_at: string;
   expected_duration_s: number;

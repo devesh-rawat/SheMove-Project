@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/models.dart';
+import '../services/vibration_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/numeric_pin_pad.dart';
 
@@ -42,11 +43,13 @@ class _EscalationWarningScreenState extends State<EscalationWarningScreen>
     _pulseAnimation = Tween<double>(begin: 0.3, end: 0.85).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+    VibrationService().startEscalationAlertPulse();
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    VibrationService().stopVibration();
     super.dispose();
   }
 
